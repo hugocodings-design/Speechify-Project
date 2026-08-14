@@ -1,0 +1,85 @@
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+name: speechify
+description: "AI-powered ebook reader with text-to-speech"
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  # UI & State Management
+  cupertino_icons: ^1.0.2
+  provider: ^6.0.0
+
+  # File handling
+  file_picker: ^5.3.0
+  path_provider: ^2.1.0
+
+  # Audio playback
+  just_audio: ^0.9.34
+  audio_session: ^0.1.16
+
+  # Local database
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
+
+  # HTTP client for backend API
+  dio: ^5.3.1
+
+  # PDF extraction
+  pdf: ^3.10.0
+  pdfx: ^2.7.2+1
+
+  # EPUB extraction
+  epub_decoder: ^0.1.4
+  archive: ^3.4.0
+  xml: ^6.0.0
+
+  # Logging & debugging
+  logger: ^2.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  flutter_lints: ^2.0.0
+  build_runner: ^2.4.0
+  hive_generator: ^2.0.0
+
+flutter:
+  uses-material-design: true
+
+  # Add any Flutter-specific assets here (e.g., fonts, images)
+  # assets:
+  #   - assets/images/
+  # fonts:
+  #   - family: CustomFont
+  #     fonts:
+  #       - asset: assets/fonts/CustomFont-Regular.ttf
