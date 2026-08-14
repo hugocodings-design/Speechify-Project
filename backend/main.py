@@ -5,8 +5,11 @@ Handles TTS synthesis and voice list management
 
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from google.cloud import texttospeech
+from google.api_core.exceptions import ResourceExhausted
+import asyncio
 import os
 import io
 from dotenv import load_dotenv
@@ -161,12 +164,33 @@ async def synthesize_text(request: SynthesizeRequest):
             speaking_rate=1.0,
         )
         
-        # Call TTS API
-        response = tts_client.synthesize_speech(
-            input=synthesis_input,
-            voice=voice,
-            audio_config=audio_config,
-        )
+        # Call TTS API — exécuté dans un thread séparé pour ne pas bloquer
+        # la boucle asyncio : c'est un appel réseau synchrone (google-cloud-tts
+        # n'a pas de client async), donc l'appeler directement ici bloquerait
+        # TOUTES les autres requêtes (y compris les préchargements en
+        # parallèle depuis l'app) pendant toute la durée de l'appel.
+        #
+        # Retry avec backoff sur 429 (quota dépassé) : les voix premium
+        # (Journey/Neural2) ont un quota par défaut assez bas côté Google,
+        # et l'app envoie plusieurs requêtes de préchargement en parallèle —
+        # un 429 occasionnel est normal, pas la peine d'échouer tout de suite.
+        max_retries = 3
+        response = None
+        for attempt in range(max_retries):
+            try:
+                response = await run_in_threadpool(
+                    tts_client.synthesize_speech,
+                    input=synthesis_input,
+                    voice=voice,
+                    audio_config=audio_config,
+                )
+                break
+            except ResourceExhausted:
+                if attempt == max_retries - 1:
+                    raise
+                delay = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
+                print(f"[TTS] Quota atteint (429), nouvelle tentative dans {delay}s...")
+                await asyncio.sleep(delay)
         
         # Return audio content (in production, save to Cloud Storage and return URL)
         import base64
