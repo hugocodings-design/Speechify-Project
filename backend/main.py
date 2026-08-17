@@ -8,7 +8,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel
 from google.cloud import texttospeech
+from google.cloud import texttospeech_v1beta1 as texttospeech_beta
 from google.api_core.exceptions import ResourceExhausted
+from xml.sax.saxutils import escape as xml_escape
 import asyncio
 import os
 import io
@@ -39,13 +41,17 @@ class Voice(BaseModel):
     display_name: str
     language_code: str
 
-# Initialize TTS client
+# Initialize TTS clients — v1 pour la liste des voix, v1beta1 pour la
+# synthèse (seule l'API beta expose enable_time_pointing, nécessaire pour
+# le surlignage mot par mot).
 try:
     tts_client = texttospeech.TextToSpeechClient()
+    tts_client_beta = texttospeech_beta.TextToSpeechClient()
 except Exception as e:
     print(f"Warning: Google Cloud TTS client not initialized: {e}")
     print("Make sure GOOGLE_APPLICATION_CREDENTIALS environment variable is set")
     tts_client = None
+    tts_client_beta = None
 
 # Available voices — vérifiées une à une contre le catalogue réel Google
 # Cloud TTS (client.list_voices) le 2026-08-14. "Journey" a été retiré du
@@ -126,12 +132,13 @@ async def synthesize_text(request: SynthesizeRequest):
         {
             "audio_content": base64-encoded MP3 audio,
             "voice_used": "en-US-Neural2-C",
-            "characters_used": 1234
+            "characters_used": 1234,
+            "word_timings": [{"word": "This", "time": 0.01}, ...]
         }
     """
-    if not tts_client:
+    if not tts_client_beta:
         raise HTTPException(status_code=500, detail="TTS client not initialized. Check Google Cloud credentials.")
-    
+
     if not request.text or len(request.text.strip()) == 0:
         raise HTTPException(status_code=400, detail="Text cannot be empty")
 
@@ -140,29 +147,40 @@ async def synthesize_text(request: SynthesizeRequest):
     voice_lang_match = _re.match(r'^([a-z]{2}-[A-Z]{2})', request.voice_name)
     if voice_lang_match:
         request.language_code = voice_lang_match.group(1)
-    
+
     if len(request.text) > 5000:
         raise HTTPException(
             status_code=400,
             detail=f"Text exceeds maximum length of 5000 characters (got {len(request.text)})"
         )
-    
+
     try:
-        # Prepare synthesis input
-        synthesis_input = texttospeech.SynthesisInput(text=request.text)
-        
-        # Select voice
-        voice = texttospeech.VoiceSelectionParams(
+        # Construit du SSML avec un marqueur avant chaque mot, pour que
+        # Google renvoie le timestamp exact où chaque mot commence à être
+        # prononcé (surlignage mot par mot pendant la lecture).
+        words = request.text.split()
+        ssml_body = ' '.join(
+            f'<mark name="w{i}"/>{xml_escape(word)}' for i, word in enumerate(words)
+        )
+        synthesis_input = texttospeech_beta.SynthesisInput(ssml=f'<speak>{ssml_body}</speak>')
+
+        voice = texttospeech_beta.VoiceSelectionParams(
             language_code=request.language_code,
             name=request.voice_name,
         )
-        
-        # Select audio configuration
-        audio_config = texttospeech.AudioConfig(
-            audio_encoding=texttospeech.AudioEncoding.MP3,
+
+        audio_config = texttospeech_beta.AudioConfig(
+            audio_encoding=texttospeech_beta.AudioEncoding.MP3,
             speaking_rate=1.0,
         )
-        
+
+        tts_request = texttospeech_beta.SynthesizeSpeechRequest(
+            input=synthesis_input,
+            voice=voice,
+            audio_config=audio_config,
+            enable_time_pointing=[texttospeech_beta.SynthesizeSpeechRequest.TimepointType.SSML_MARK],
+        )
+
         # Call TTS API — exécuté dans un thread séparé pour ne pas bloquer
         # la boucle asyncio : c'est un appel réseau synchrone (google-cloud-tts
         # n'a pas de client async), donc l'appeler directement ici bloquerait
@@ -178,10 +196,8 @@ async def synthesize_text(request: SynthesizeRequest):
         for attempt in range(max_retries):
             try:
                 response = await run_in_threadpool(
-                    tts_client.synthesize_speech,
-                    input=synthesis_input,
-                    voice=voice,
-                    audio_config=audio_config,
+                    tts_client_beta.synthesize_speech,
+                    request=tts_request,
                 )
                 break
             except ResourceExhausted:
@@ -190,18 +206,29 @@ async def synthesize_text(request: SynthesizeRequest):
                 delay = 0.5 * (2 ** attempt)  # 0.5s, 1s, 2s
                 print(f"[TTS] Quota atteint (429), nouvelle tentative dans {delay}s...")
                 await asyncio.sleep(delay)
-        
+
         # Return audio content (in production, save to Cloud Storage and return URL)
         import base64
         audio_b64 = base64.b64encode(response.audio_content).decode('utf-8')
-        
+
+        # Reconstruit les timings mot par mot depuis les marqueurs SSML
+        # ("w{i}" -> mot d'origine à l'index i)
+        word_timings = []
+        for tp in response.timepoints:
+            try:
+                idx = int(tp.mark_name[1:])
+                word_timings.append({"word": words[idx], "time": tp.time_seconds})
+            except (ValueError, IndexError):
+                continue
+
         return {
             "audio_content": audio_b64,
             "voice_used": request.voice_name,
             "characters_used": len(request.text),
-            "format": "mp3"
+            "format": "mp3",
+            "word_timings": word_timings,
         }
-    
+
     except Exception as e:
         print(f"[TTS ERROR] {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=f"TTS synthesis failed: {str(e)}")
