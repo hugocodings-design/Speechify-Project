@@ -47,31 +47,32 @@ except Exception as e:
     print("Make sure GOOGLE_APPLICATION_CREDENTIALS environment variable is set")
     tts_client = None
 
-# Available voices — Journey pour l'anglais, Neural2 pour FR/ES/PT
+# Available voices — vérifiées une à une contre le catalogue réel Google
+# Cloud TTS (client.list_voices) le 2026-08-14. "Journey" a été retiré du
+# catalogue Google entre-temps ; remplacé par Neural2. fr-FR et pt-PT n'ont
+# que 2 voix Neural2/Wavenet distinctes chacune côté Google — pas plus
+# disponible, peu importe le nom demandé.
 AVAILABLE_VOICES = [
-    # ── English (US) — Journey ──────────────────────────────────────────────
-    {"name": "en-US-Journey-D",  "display_name": "🇺🇸 English (US) - Journey Male D",   "language_code": "en-US"},
-    {"name": "en-US-Journey-F",  "display_name": "🇺🇸 English (US) - Journey Female F",  "language_code": "en-US"},
-    {"name": "en-US-Journey-O",  "display_name": "🇺🇸 English (US) - Journey Female O",  "language_code": "en-US"},
-    # ── English (GB) — Journey ──────────────────────────────────────────────
-    {"name": "en-GB-Journey-D",  "display_name": "🇬🇧 English (UK) - Journey Male D",   "language_code": "en-GB"},
-    {"name": "en-GB-Journey-F",  "display_name": "🇬🇧 English (UK) - Journey Female F",  "language_code": "en-GB"},
+    # ── English (US) — Neural2 ───────────────────────────────────────────────
+    {"name": "en-US-Neural2-D",  "display_name": "🇺🇸 English (US) - Male D",     "language_code": "en-US"},
+    {"name": "en-US-Neural2-C",  "display_name": "🇺🇸 English (US) - Female C",   "language_code": "en-US"},
+    {"name": "en-US-Neural2-F",  "display_name": "🇺🇸 English (US) - Female F",   "language_code": "en-US"},
+    # ── English (GB) — Neural2 ───────────────────────────────────────────────
+    {"name": "en-GB-Neural2-B",  "display_name": "🇬🇧 English (UK) - Male B",     "language_code": "en-GB"},
+    {"name": "en-GB-Neural2-F",  "display_name": "🇬🇧 English (UK) - Female F",   "language_code": "en-GB"},
     # ── Français (Canada) — Neural2 ─────────────────────────────────────────
     {"name": "fr-CA-Neural2-A",  "display_name": "🇨🇦 Français (Canada) - Féminin A",   "language_code": "fr-CA"},
     {"name": "fr-CA-Neural2-B",  "display_name": "🇨🇦 Français (Canada) - Masculin B",  "language_code": "fr-CA"},
     {"name": "fr-CA-Neural2-C",  "display_name": "🇨🇦 Français (Canada) - Féminin C",   "language_code": "fr-CA"},
     {"name": "fr-CA-Neural2-D",  "display_name": "🇨🇦 Français (Canada) - Masculin D",  "language_code": "fr-CA"},
-    # ── Français (France) — Neural2 ─────────────────────────────────────────
-    {"name": "fr-FR-Neural2-A",  "display_name": "🇫🇷 Français (France) - Féminin A",   "language_code": "fr-FR"},
-    {"name": "fr-FR-Neural2-B",  "display_name": "🇫🇷 Français (France) - Masculin B",  "language_code": "fr-FR"},
-    {"name": "fr-FR-Neural2-C",  "display_name": "🇫🇷 Français (France) - Féminin C",   "language_code": "fr-FR"},
-    {"name": "fr-FR-Neural2-D",  "display_name": "🇫🇷 Français (France) - Masculin D",  "language_code": "fr-FR"},
-    {"name": "fr-FR-Neural2-E",  "display_name": "🇫🇷 Français (France) - Féminin E",   "language_code": "fr-FR"},
+    # ── Français (France) — Neural2 (seulement 2 voix existent chez Google) ─
+    {"name": "fr-FR-Neural2-F",  "display_name": "🇫🇷 Français (France) - Féminin F",   "language_code": "fr-FR"},
+    {"name": "fr-FR-Neural2-G",  "display_name": "🇫🇷 Français (France) - Masculin G",  "language_code": "fr-FR"},
     # ── Español (España) — Neural2 ──────────────────────────────────────────
     {"name": "es-ES-Neural2-A",  "display_name": "🇪🇸 Español (España) - Femenino A",   "language_code": "es-ES"},
-    {"name": "es-ES-Neural2-B",  "display_name": "🇪🇸 Español (España) - Masculino B",  "language_code": "es-ES"},
-    {"name": "es-ES-Neural2-C",  "display_name": "🇪🇸 Español (España) - Femenino C",   "language_code": "es-ES"},
-    {"name": "es-ES-Neural2-D",  "display_name": "🇪🇸 Español (España) - Masculino D",  "language_code": "es-ES"},
+    {"name": "es-ES-Neural2-F",  "display_name": "🇪🇸 Español (España) - Masculino F",  "language_code": "es-ES"},
+    {"name": "es-ES-Neural2-H",  "display_name": "🇪🇸 Español (España) - Femenino H",   "language_code": "es-ES"},
+    {"name": "es-ES-Neural2-G",  "display_name": "🇪🇸 Español (España) - Masculino G",  "language_code": "es-ES"},
     # ── Español (US) — Neural2 ──────────────────────────────────────────────
     {"name": "es-US-Neural2-A",  "display_name": "🇺🇸 Español (US) - Femenino A",       "language_code": "es-US"},
     {"name": "es-US-Neural2-B",  "display_name": "🇺🇸 Español (US) - Masculino B",      "language_code": "es-US"},
@@ -80,11 +81,9 @@ AVAILABLE_VOICES = [
     {"name": "pt-BR-Neural2-A",  "display_name": "🇧🇷 Português (Brasil) - Feminino A",  "language_code": "pt-BR"},
     {"name": "pt-BR-Neural2-B",  "display_name": "🇧🇷 Português (Brasil) - Masculino B", "language_code": "pt-BR"},
     {"name": "pt-BR-Neural2-C",  "display_name": "🇧🇷 Português (Brasil) - Feminino C",  "language_code": "pt-BR"},
-    # ── Português (Portugal) — Neural2 ──────────────────────────────────────
-    {"name": "pt-PT-Neural2-A",  "display_name": "🇵🇹 Português (Portugal) - Feminino A",  "language_code": "pt-PT"},
-    {"name": "pt-PT-Neural2-B",  "display_name": "🇵🇹 Português (Portugal) - Masculino B", "language_code": "pt-PT"},
-    {"name": "pt-PT-Neural2-C",  "display_name": "🇵🇹 Português (Portugal) - Feminino C",  "language_code": "pt-PT"},
-    {"name": "pt-PT-Neural2-D",  "display_name": "🇵🇹 Português (Portugal) - Masculino D", "language_code": "pt-PT"},
+    # ── Português (Portugal) — Wavenet (pas de Neural2 pour cette langue) ───
+    {"name": "pt-PT-Wavenet-E",  "display_name": "🇵🇹 Português (Portugal) - Feminino E",  "language_code": "pt-PT"},
+    {"name": "pt-PT-Wavenet-F",  "display_name": "🇵🇹 Português (Portugal) - Masculino F", "language_code": "pt-PT"},
 ]
 
 # API Routes
