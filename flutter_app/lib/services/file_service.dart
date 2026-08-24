@@ -1,208 +1,182 @@
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
-
 import 'package:archive/archive.dart';
-import 'package:dio/dio.dart';
-import 'package:epub_decoder/epub_decoder.dart';
 import 'package:logger/logger.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdfx/pdfx.dart';
+import 'package:pdfrx/pdfrx.dart' as pdfrx;
 import 'package:xml/xml.dart';
-
 import '../models/chapter.dart';
 
 class FileService {
-  final String apiBaseUrl;
-  late final Dio _dio;
   final _logger = Logger();
 
-  FileService({this.apiBaseUrl = 'http://192.168.0.10:8000'}) {
-    _dio = Dio(BaseOptions(
-      baseUrl: apiBaseUrl,
-      connectTimeout: const Duration(seconds: 30),
-      receiveTimeout: const Duration(seconds: 60),
-    ));
-  }
+  /// Au-delà, on regroupe plusieurs pages par chapitre — même convention que
+  /// l'ancien backend (`pages_per_chapter = max(1, total_pages // 20)`), pour
+  /// ne pas produire des dizaines de micro-chapitres sur un livre de 300 pages.
+  static const int _maxChaptersTarget = 20;
 
-  /// Extrait le texte d'un PDF en envoyant le fichier au backend Python
+  /// Extraire le texte d'un PDF, entièrement sur l'appareil (pdfrx/pdfium) —
+  /// aucun réseau requis, fonctionne loin de tout Wi-Fi.
   Future<List<Chapter>> extractPdfText(String filePath) async {
+    pdfrx.PdfDocument? document;
     try {
-      _logger.i('Extraction PDF via backend: $filePath');
+      _logger.i('Extraction PDF locale: $filePath');
+      document = await pdfrx.PdfDocument.openFile(filePath);
+      final totalPages = document.pages.length;
+      if (totalPages == 0) {
+        throw Exception('Ce PDF ne contient aucune page');
+      }
 
-      final formData = FormData.fromMap({
-        'file': await MultipartFile.fromFile(filePath, filename: 'document.pdf'),
-      });
+      final pageTexts = <String>[];
+      for (final page in document.pages) {
+        final pageText = await page.loadText();
+        pageTexts.add(pageText.fullText);
+      }
 
-      final response = await _dio.post<Map<String, dynamic>>(
-        '/api/extract-pdf',
-        data: formData,
-      );
-
-      final chaptersJson = response.data!['chapters'] as List;
-      final chapters = chaptersJson.map((c) {
-        final map = c as Map<String, dynamic>;
-        return Chapter(
-          id: map['id'] as String,
-          title: map['title'] as String,
-          textContent: map['textContent'] as String,
-          wordCount: map['wordCount'] as int,
-          pageNumber: map['pageNumber'] as int,
+      final chapters = _groupPagesIntoChapters(pageTexts);
+      if (chapters.isEmpty) {
+        throw Exception(
+          'Aucun texte extractible — ce PDF est probablement scanné/image '
+          '(essayez plutôt le scan caméra, qui utilise la reconnaissance de texte).',
         );
-      }).toList();
-
-      _logger.i('Extraction PDF terminée: ${chapters.length} chapitres');
+      }
+      _logger.i('PDF extrait: ${chapters.length} chapitres');
       return chapters;
-    } on DioException catch (e) {
-      _logger.e('Erreur réseau extraction PDF: $e');
-      throw Exception('Impossible d\'extraire le PDF: ${e.message}');
     } catch (e) {
       _logger.e('Erreur extraction PDF: $e');
       rethrow;
+    } finally {
+      await document?.dispose();
     }
   }
 
-  /// Extrait le texte d'un EPUB.
-  /// Essaie epub_decoder en premier, puis fallback ZIP direct si ça échoue.
-  Future<List<Chapter>> extractEpubText(String filePath) async {
-    _logger.i('Extraction EPUB: $filePath');
-    final bytes = await File(filePath).readAsBytes();
-
-    // Tentative 1 : epub_decoder (standard EPUBs avec dossier OEBPS/)
-    try {
-      final chapters = await _extractViaEpubDecoder(bytes);
-      if (chapters.isNotEmpty) {
-        _logger.i('epub_decoder: ${chapters.length} chapitres extraits');
-        return chapters;
-      }
-    } catch (e) {
-      _logger.w('epub_decoder a échoué, fallback ZIP: $e');
-    }
-
-    // Tentative 2 : lecture directe du ZIP (EPUBs non-standard)
-    try {
-      final chapters = await _extractViaZip(bytes);
-      if (chapters.isNotEmpty) {
-        _logger.i('Fallback ZIP: ${chapters.length} chapitres extraits');
-        return chapters;
-      }
-    } catch (e) {
-      _logger.e('Fallback ZIP a aussi échoué: $e');
-    }
-
-    return _emptyChapter();
-  }
-
-  /// Méthode 1 : epub_decoder (fonctionne pour les EPUBs avec structure OEBPS/)
-  Future<List<Chapter>> _extractViaEpubDecoder(List<int> bytes) async {
-    final epub = Epub.fromBytes(Uint8List.fromList(bytes));
+  /// Regroupe le texte page par page en chapitres, façon backend :
+  /// `pagesParChapitre = max(1, totalPages / 20)`, titre "Pages N–M".
+  List<Chapter> _groupPagesIntoChapters(List<String> pageTexts) {
+    final totalPages = pageTexts.length;
+    final pagesPerChapter = (totalPages / _maxChaptersTarget).ceil().clamp(1, totalPages);
     final chapters = <Chapter>[];
 
-    for (final section in epub.sections) {
-      try {
-        final xhtmlBytes = section.content.fileContent;
-        final xhtmlString = utf8.decode(xhtmlBytes);
+    for (var start = 0; start < totalPages; start += pagesPerChapter) {
+      final end = (start + pagesPerChapter).clamp(0, totalPages);
+      final text = pageTexts
+          .sublist(start, end)
+          .map((t) => t.trim())
+          .where((t) => t.isNotEmpty)
+          .join('\n\n');
+      if (text.isEmpty) continue;
+
+      final firstPage = start + 1;
+      final lastPage = end;
+      chapters.add(Chapter(
+        id: 'ch_${chapters.length}',
+        title: firstPage == lastPage ? 'Page $firstPage' : 'Pages $firstPage–$lastPage',
+        textContent: text,
+        wordCount: text.split(RegExp(r'\s+')).length,
+        pageNumber: firstPage,
+      ));
+    }
+    return chapters;
+  }
+
+  /// Extraire le texte d'un EPUB, entièrement sur l'appareil.
+  ///
+  /// On lit directement le ZIP plutôt que d'utiliser `epub_decoder` : ce
+  /// dernier plante sur certains EPUB aux types MIME non standards (déjà
+  /// constaté pour l'extraction de couverture, voir `_extractEpubCover`).
+  Future<List<Chapter>> extractEpubText(String filePath) async {
+    try {
+      _logger.i('Extraction EPUB locale: $filePath');
+      final bytes = await File(filePath).readAsBytes();
+      final archive = ZipDecoder().decodeBytes(bytes);
+
+      final containerFile = archive.findFile('META-INF/container.xml');
+      if (containerFile == null) {
+        throw Exception('META-INF/container.xml introuvable — EPUB invalide');
+      }
+      final containerXml = XmlDocument.parse(utf8.decode(containerFile.content as List<int>));
+      final opfPath = containerXml
+          .findAllElements('rootfile')
+          .first
+          .getAttribute('full-path');
+      if (opfPath == null) throw Exception('Chemin OPF introuvable');
+
+      final opfDir = opfPath.contains('/')
+          ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1)
+          : '';
+
+      final opfFile = archive.findFile(opfPath);
+      if (opfFile == null) throw Exception('Fichier OPF introuvable: $opfPath');
+      final opfXml = XmlDocument.parse(utf8.decode(opfFile.content as List<int>));
+
+      final manifestItems = <String, String>{};
+      for (final item in opfXml.findAllElements('item')) {
+        final id = item.getAttribute('id');
+        final href = item.getAttribute('href');
+        final mediaType = item.getAttribute('media-type') ?? '';
+        if (id != null && href != null && mediaType.contains('html')) {
+          manifestItems[id] = href;
+        }
+      }
+
+      final spineItems = opfXml
+          .findAllElements('itemref')
+          .map((e) => e.getAttribute('idref'))
+          .whereType<String>()
+          .toList();
+
+      final chapters = <Chapter>[];
+      var order = 0;
+      for (final idref in spineItems) {
+        final href = manifestItems[idref];
+        if (href == null) continue;
+
+        final fullPath = href.startsWith('/') ? href.substring(1) : '$opfDir$href';
+        final xhtmlFile = archive.findFile(fullPath);
+        if (xhtmlFile == null) continue;
+
+        final xhtmlString = utf8.decode(xhtmlFile.content as List<int>);
         final text = _stripHtml(xhtmlString);
+        if (text.trim().length < 50) continue;
 
-        if (text.trim().length < 100) continue;
-
-        final words = text.trim().split(RegExp(r'\s+'));
-        final order = section.readingOrder;
-
+        order++;
         chapters.add(Chapter(
           id: 'ch_$order',
           title: _extractTitle(xhtmlString, order),
           textContent: text.trim(),
-          wordCount: words.length,
+          wordCount: text.trim().split(RegExp(r'\s+')).length,
           pageNumber: order,
         ));
-      } catch (e) {
-        _logger.w('Section ${section.readingOrder} ignorée: $e');
       }
-    }
 
-    return chapters;
+      if (chapters.isEmpty) {
+        throw Exception(
+          'Aucun texte lisible trouvé dans cet EPUB (structure non reconnue, '
+          'fichier vide, ou protégé par DRM).',
+        );
+      }
+      _logger.i('EPUB extrait: ${chapters.length} chapitres');
+      return chapters;
+    } catch (e) {
+      _logger.e('Erreur extraction EPUB: $e');
+      rethrow;
+    }
   }
 
-  /// Méthode 2 : lecture directe du ZIP EPUB sans supposer la structure
-  Future<List<Chapter>> _extractViaZip(List<int> bytes) async {
-    final archive = ZipDecoder().decodeBytes(bytes);
-
-    // Étape 1 : lire META-INF/container.xml pour trouver le fichier OPF
-    final containerFile = archive.findFile('META-INF/container.xml');
-    if (containerFile == null) throw Exception('META-INF/container.xml introuvable');
-
-    final containerXml = XmlDocument.parse(utf8.decode(containerFile.content));
-    final opfPath = containerXml
-        .findAllElements('rootfile')
-        .first
-        .getAttribute('full-path');
-    if (opfPath == null) throw Exception('Chemin OPF introuvable');
-
-    // Dossier de base = répertoire contenant le fichier OPF
-    final baseDir = opfPath.contains('/')
-        ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1)
-        : '';
-
-    // Étape 2 : lire le fichier OPF pour obtenir le spine (ordre de lecture)
-    final opfFile = archive.findFile(opfPath);
-    if (opfFile == null) throw Exception('Fichier OPF introuvable: $opfPath');
-
-    final opfXml = XmlDocument.parse(utf8.decode(opfFile.content));
-
-    // Construire une map id → href depuis le manifest
-    final manifestItems = <String, String>{};
-    for (final item in opfXml.findAllElements('item')) {
-      final id = item.getAttribute('id');
-      final href = item.getAttribute('href');
-      final mediaType = item.getAttribute('media-type') ?? '';
-      if (id != null && href != null && mediaType.contains('xhtml')) {
-        manifestItems[id] = href;
-      }
-    }
-
-    // Lire l'ordre du spine
-    final spineItems = opfXml.findAllElements('itemref')
-        .map((e) => e.getAttribute('idref'))
-        .whereType<String>()
-        .toList();
-
-    // Étape 3 : extraire le texte de chaque fichier XHTML dans l'ordre du spine
-    final chapters = <Chapter>[];
-    int order = 0;
-
-    for (final idref in spineItems) {
-      final href = manifestItems[idref];
-      if (href == null) continue;
-
-      // Construire le chemin complet dans le ZIP
-      final fullPath = href.startsWith('/') ? href.substring(1) : '$baseDir$href';
-      final xhtmlFile = archive.findFile(fullPath);
-      if (xhtmlFile == null) continue;
-
-      final xhtmlString = utf8.decode(xhtmlFile.content);
-      final text = _stripHtml(xhtmlString);
-
-      if (text.trim().length < 100) continue;
-
-      order++;
-      final words = text.trim().split(RegExp(r'\s+'));
-
-      chapters.add(Chapter(
-        id: 'ch_$order',
-        title: _extractTitle(xhtmlString, order),
-        textContent: text.trim(),
-        wordCount: words.length,
-        pageNumber: order,
-      ));
-    }
-
-    return chapters;
-  }
-
-  /// Supprime les balises HTML et décode les entités pour obtenir du texte brut
+  /// Supprime les balises HTML et décode les entités, en préservant les
+  /// coupures de paragraphe (meilleures pauses à la synthèse vocale).
   String _stripHtml(String html) {
-    String text = html.replaceAll(
-      RegExp(r'<(script|style)[^>]*>.*?</(script|style)>', dotAll: true),
+    var text = html.replaceAll(
+      RegExp(r'<(script|style)[^>]*>.*?</(script|style)>', dotAll: true, caseSensitive: false),
       '',
+    );
+    // Marque les frontières de bloc avant de retirer les balises, pour ne
+    // pas recoller deux paragraphes en une seule phrase.
+    text = text.replaceAll(
+      RegExp(r'</(p|div|li|h[1-6]|br)\s*>', caseSensitive: false),
+      '\n\n',
     );
     text = text.replaceAll(RegExp(r'<[^>]+>'), ' ');
     text = text
@@ -210,9 +184,14 @@ class FileService {
         .replaceAll('&lt;', '<')
         .replaceAll('&gt;', '>')
         .replaceAll('&quot;', '"')
+        .replaceAll('&#39;', "'")
         .replaceAll('&apos;', "'")
         .replaceAll('&nbsp;', ' ');
-    return text.replaceAll(RegExp(r'\s+'), ' ').trim();
+    // Compacte les espaces horizontaux sans toucher aux doubles retours à la
+    // ligne qui marquent les paragraphes.
+    text = text.replaceAll(RegExp(r'[ \t]+'), ' ');
+    text = text.replaceAll(RegExp(r'\n{3,}'), '\n\n');
+    return text.trim();
   }
 
   /// Extrait le titre depuis les balises h1/h2/h3 du XHTML
@@ -231,30 +210,197 @@ class FileService {
     return 'Chapitre $order';
   }
 
-  List<Chapter> _emptyChapter() {
-    return [
-      Chapter(
-        id: 'ch_1',
-        title: 'Chapitre 1',
-        textContent: 'Aucun texte lisible trouvé dans ce fichier.',
-        wordCount: 8,
-        pageNumber: 1,
-      ),
-    ];
-  }
-
-  /// Détecte le format selon l'extension du fichier
+  /// Détecter le format du fichier selon son extension
   String detectFileFormat(String filePath) {
     if (filePath.toLowerCase().endsWith('.pdf')) return 'pdf';
     if (filePath.toLowerCase().endsWith('.epub')) return 'epub';
-    throw Exception('Format non supporté (PDF et EPUB seulement)');
+    throw Exception('Format non supporté');
   }
 
-  /// Point d'entrée principal: extrait le texte selon le format détecté
+  /// Extraire le texte selon le format
   Future<List<Chapter>> extractText(String filePath) async {
     final format = detectFileFormat(filePath);
     if (format == 'pdf') return extractPdfText(filePath);
     if (format == 'epub') return extractEpubText(filePath);
     throw Exception('Format non supporté: $format');
+  }
+
+  /// Extraire et sauvegarder la couverture d'un PDF ou EPUB.
+  /// Retourne le chemin local de l'image, ou null si introuvable.
+  Future<String?> extractCoverImage(String filePath, String fileFormat) async {
+    try {
+      final docsDir = await getApplicationDocumentsDirectory();
+      final coverDir = Directory('${docsDir.path}/covers');
+      if (!await coverDir.exists()) await coverDir.create(recursive: true);
+
+      final id = filePath.hashCode.abs().toString();
+      _logger.i('Extraction couverture [$fileFormat] id=$id');
+
+      String? result;
+      if (fileFormat == 'pdf') {
+        result = await _extractPdfCover(filePath, coverDir.path, id);
+      } else if (fileFormat == 'epub') {
+        result = await _extractEpubCover(filePath, coverDir.path, id);
+      }
+
+      _logger.i('Couverture extraite: $result');
+      return result;
+    } catch (e, s) {
+      _logger.e('Extraction couverture échouée: $e', error: e, stackTrace: s);
+    }
+    return null;
+  }
+
+  Future<String?> _extractPdfCover(
+      String filePath, String coverDir, String id) async {
+    PdfDocument? document;
+    PdfPage? page;
+    try {
+      document = await PdfDocument.openFile(filePath);
+      _logger.i('PDF ouvert: ${document.pagesCount} pages, taille page 1 ?');
+      page = await document.getPage(1);
+      _logger.i('Page 1: ${page.width}x${page.height}');
+
+      final renderWidth = page.width.clamp(100.0, 600.0);
+      final renderHeight = page.height.clamp(100.0, 900.0);
+
+      final image = await page.render(
+        width: renderWidth,
+        height: renderHeight,
+        format: PdfPageImageFormat.jpeg,
+        backgroundColor: '#FFFFFF',
+        quality: 85,
+      );
+      _logger.i('Render résultat: ${image?.bytes.length} bytes');
+      if (image != null && image.bytes.isNotEmpty) {
+        final destPath = '$coverDir/cover_$id.jpg';
+        await File(destPath).writeAsBytes(image.bytes);
+        _logger.i('Couverture PDF sauvegardée: $destPath');
+        return destPath;
+      }
+    } finally {
+      await page?.close();
+      await document?.close();
+    }
+    return null;
+  }
+
+  /// Extrait la couverture directement depuis le ZIP (EPUB = archive ZIP).
+  /// Évite epub_decoder qui crash sur des types MIME non standards.
+  Future<String?> _extractEpubCover(
+      String filePath, String coverDir, String id) async {
+    final zipBytes = await File(filePath).readAsBytes();
+    final archive = ZipDecoder().decodeBytes(zipBytes);
+
+    // 1 — Lire container.xml pour trouver le fichier OPF
+    final containerFile = archive.findFile('META-INF/container.xml');
+    if (containerFile == null) {
+      _logger.w('EPUB: container.xml introuvable');
+      return null;
+    }
+    final containerXml = utf8.decode(containerFile.content as List<int>);
+    final opfMatch =
+        RegExp(r'full-path="([^"]+\.opf)"', caseSensitive: false)
+            .firstMatch(containerXml);
+    if (opfMatch == null) {
+      _logger.w('EPUB: OPF path introuvable dans container.xml');
+      return null;
+    }
+    final opfPath = opfMatch.group(1)!;
+    _logger.i('EPUB OPF: $opfPath');
+
+    // 2 — Lire le fichier OPF
+    final opfFile = archive.findFile(opfPath);
+    if (opfFile == null) return null;
+    final opfXml = utf8.decode(opfFile.content as List<int>);
+    // Log des 1500 premiers caractères pour diagnostiquer le format
+    _logger.i('OPF contenu (début):\n${opfXml.substring(0, opfXml.length.clamp(0, 1500))}');
+    final opfDir = opfPath.contains('/')
+        ? opfPath.substring(0, opfPath.lastIndexOf('/') + 1)
+        : '';
+
+    // 3 — Trouver le href de la couverture dans l'OPF
+    String? coverHref;
+
+    // Méthode A : <item properties="cover-image" href="..."/>
+    final propMatch =
+        RegExp(r'<item[^>]*properties="[^"]*cover-image[^"]*"[^>]*href="([^"]+)"',
+                caseSensitive: false)
+            .firstMatch(opfXml) ??
+        RegExp(r'<item[^>]*href="([^"]+)"[^>]*properties="[^"]*cover-image[^"]*"',
+                caseSensitive: false)
+            .firstMatch(opfXml);
+    if (propMatch != null) coverHref = propMatch.group(1);
+
+    // Méthode B : chercher name="cover" n'importe où dans le OPF
+    if (coverHref == null) {
+      // Extraire l'id depuis content="..." dans un tag qui contient name="cover"
+      String? coverId;
+      final lowerOpf = opfXml.toLowerCase();
+      final nameIdx = lowerOpf.indexOf('name="cover"');
+      if (nameIdx >= 0) {
+        // Trouver le début du tag <meta contenant ce name="cover"
+        final tagStart = opfXml.lastIndexOf('<', nameIdx);
+        final tagEnd = opfXml.indexOf('>', nameIdx);
+        if (tagStart >= 0 && tagEnd > tagStart) {
+          final metaTag = opfXml.substring(tagStart, tagEnd + 1);
+          _logger.i('Meta tag trouvé: $metaTag');
+          final contentMatch =
+              RegExp(r'content="([^"]+)"', caseSensitive: false)
+                  .firstMatch(metaTag);
+          coverId = contentMatch?.group(1);
+          _logger.i('Cover ID: $coverId');
+        }
+      }
+
+      if (coverId != null) {
+        final escapedId = RegExp.escape(coverId);
+        final itemMatch =
+            RegExp('id="$escapedId"[^>]*href="([^"]+)"', caseSensitive: false)
+                .firstMatch(opfXml) ??
+            RegExp('href="([^"]+)"[^>]*id="$escapedId"', caseSensitive: false)
+                .firstMatch(opfXml);
+        coverHref = itemMatch?.group(1);
+        _logger.i('Cover href from meta: $coverHref');
+      }
+    }
+
+    // Méthode C : fallback — premier <item> avec media-type image dans le manifest
+    if (coverHref == null) {
+      final imageMatch =
+          RegExp(r'<item[^>]*media-type="image/[^"]*"[^>]*href="([^"]+)"',
+                  caseSensitive: false)
+              .firstMatch(opfXml) ??
+          RegExp(r'<item[^>]*href="([^"]+)"[^>]*media-type="image/[^"]*"',
+                  caseSensitive: false)
+              .firstMatch(opfXml);
+      if (imageMatch != null) {
+        coverHref = imageMatch.group(1);
+        _logger.i('Cover href fallback (première image): $coverHref');
+      }
+    }
+
+    if (coverHref == null) {
+      _logger.w('EPUB: couverture introuvable dans OPF');
+      return null;
+    }
+
+    _logger.i('EPUB cover href: $coverHref');
+
+    // 4 — Extraire l'image depuis l'archive
+    final fullPath = '$opfDir$coverHref';
+    final coverEntry = archive.findFile(fullPath) ??
+        archive.findFile(coverHref); // fallback chemin absolu
+    if (coverEntry == null) {
+      _logger.w('EPUB: fichier couverture "$fullPath" introuvable dans ZIP');
+      return null;
+    }
+
+    final coverBytes = coverEntry.content as List<int>;
+    final ext = coverHref.toLowerCase().endsWith('.png') ? 'png' : 'jpg';
+    final destPath = '$coverDir/cover_$id.$ext';
+    await File(destPath).writeAsBytes(Uint8List.fromList(coverBytes));
+    _logger.i('Couverture EPUB sauvegardée: $destPath');
+    return destPath;
   }
 }

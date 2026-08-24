@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
-import 'package:hive_flutter/hive_flutter.dart';
-
-import '../services/tts_service.dart';
+import 'package:hive/hive.dart';
+import '../main.dart' show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier;
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({Key? key}) : super(key: key);
@@ -11,65 +10,45 @@ class SettingsScreen extends StatefulWidget {
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  late Box _settingsBox;
-  final TtsService _ttsService = TtsService();
-
-  List<Voice> _voices = [];
-  bool _loadingVoices = true;
-
-  String _defaultVoice = 'en-US-Neural2-C';
-  double _defaultSpeed = 1.0;
-
-  static const List<double> _speedOptions = [0.75, 1.0, 1.25, 1.5];
+  late TextEditingController _serverUrlController;
 
   @override
   void initState() {
     super.initState();
-    _settingsBox = Hive.box('settings');
-    _loadSavedSettings();
-    _loadVoices();
+    final settings = Hive.box('settings');
+    _serverUrlController = TextEditingController(
+      text: settings.get('serverUrl', defaultValue: 'http://192.168.0.160:8000') as String,
+    );
   }
 
-  void _loadSavedSettings() {
-    setState(() {
-      _defaultVoice =
-          _settingsBox.get('default_voice', defaultValue: 'en-US-Neural2-C') as String;
-      _defaultSpeed =
-          (_settingsBox.get('default_speed', defaultValue: 1.0) as num).toDouble();
-    });
+  @override
+  void dispose() {
+    _serverUrlController.dispose();
+    super.dispose();
   }
 
-  Future<void> _loadVoices() async {
-    try {
-      final voices = await _ttsService.getAvailableVoices();
-      if (mounted) {
-        setState(() {
-          _voices = voices;
-          _loadingVoices = false;
-        });
-      }
-    } catch (e) {
-      if (mounted) {
-        setState(() => _loadingVoices = false);
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Impossible de charger les voix: $e'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
+  void _saveServerUrl(String value) {
+    Hive.box('settings').put('serverUrl', value.trim());
   }
 
-  Future<void> _saveVoice(String? voice) async {
-    if (voice == null) return;
-    await _settingsBox.put('default_voice', voice);
-    setState(() => _defaultVoice = voice);
+  void _setTheme(ThemeMode mode) {
+    themeModeNotifier.value = mode;
+    final key = mode == ThemeMode.light
+        ? 'light'
+        : mode == ThemeMode.dark
+            ? 'dark'
+            : 'system';
+    Hive.box('settings').put('themeMode', key);
   }
 
-  Future<void> _saveSpeed(double speed) async {
-    await _settingsBox.put('default_speed', speed);
-    setState(() => _defaultSpeed = speed);
+  void _setFontSize(double size) {
+    fontSizeNotifier.value = size;
+    Hive.box('settings').put('fontSize', size);
+  }
+
+  void _setFontFamily(String? family) {
+    fontFamilyNotifier.value = family;
+    Hive.box('settings').put('fontFamily', family);
   }
 
   @override
@@ -78,100 +57,162 @@ class _SettingsScreenState extends State<SettingsScreen> {
       appBar: AppBar(
         title: const Text('Paramètres'),
         elevation: 0,
+        automaticallyImplyLeading: false,
       ),
       body: ListView(
         children: [
-          // Section voix
-          _buildSectionHeader('Voix par défaut'),
-          _buildVoiceSelector(),
+          // ── Apparence ────────────────────────────────────────────────────
+          _SectionHeader(label: 'Apparence'),
 
-          const Divider(height: 32),
+          ValueListenableBuilder<ThemeMode>(
+            valueListenable: themeModeNotifier,
+            builder: (context, themeMode, _) => Column(
+              children: [
+                RadioListTile<ThemeMode>(
+                  title: const Text('Système'),
+                  secondary: const Icon(Icons.brightness_auto_rounded),
+                  value: ThemeMode.system,
+                  groupValue: themeMode,
+                  onChanged: (v) => _setTheme(v!),
+                ),
+                RadioListTile<ThemeMode>(
+                  title: const Text('Clair'),
+                  secondary: const Icon(Icons.light_mode_rounded),
+                  value: ThemeMode.light,
+                  groupValue: themeMode,
+                  onChanged: (v) => _setTheme(v!),
+                ),
+                RadioListTile<ThemeMode>(
+                  title: const Text('Sombre'),
+                  secondary: const Icon(Icons.dark_mode_rounded),
+                  value: ThemeMode.dark,
+                  groupValue: themeMode,
+                  onChanged: (v) => _setTheme(v!),
+                ),
+              ],
+            ),
+          ),
 
-          // Section vitesse
-          _buildSectionHeader('Vitesse de lecture par défaut'),
-          _buildSpeedSelector(),
+          const Divider(),
 
-          const Divider(height: 32),
+          // ── Texte ────────────────────────────────────────────────────────
+          _SectionHeader(label: 'Texte'),
 
-          // Section info
-          _buildSectionHeader('À propos'),
-          const ListTile(
-            leading: Icon(Icons.info_outline),
-            title: Text('Speechify'),
-            subtitle: Text('Version 1.0.0 — Propulsé par Google Cloud TTS'),
+          ValueListenableBuilder<double>(
+            valueListenable: fontSizeNotifier,
+            builder: (context, fontSize, _) => Column(
+              children: [
+                ListTile(
+                  leading: const Icon(Icons.format_size_rounded),
+                  title: const Text('Taille du texte'),
+                  trailing: Text(
+                    '${fontSize.toInt()} pt',
+                    style: TextStyle(
+                      fontSize: 14,
+                      color: Theme.of(context).colorScheme.primary,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16),
+                  child: Row(
+                    children: [
+                      const Text('A', style: TextStyle(fontSize: 12)),
+                      Expanded(
+                        child: Slider(
+                          value: fontSize,
+                          min: 12,
+                          max: 28,
+                          divisions: 8,
+                          onChanged: _setFontSize,
+                        ),
+                      ),
+                      const Text('A', style: TextStyle(fontSize: 22)),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          ValueListenableBuilder<String?>(
+            valueListenable: fontFamilyNotifier,
+            builder: (context, fontFamily, _) => ListTile(
+              leading: const Icon(Icons.font_download_rounded),
+              title: const Text('Police'),
+              trailing: DropdownButton<String?>(
+                value: fontFamily,
+                underline: const SizedBox(),
+                items: const [
+                  DropdownMenuItem(value: null, child: Text('Défaut')),
+                  DropdownMenuItem(value: 'Georgia', child: Text('Georgia')),
+                  DropdownMenuItem(value: 'serif', child: Text('Serif')),
+                  DropdownMenuItem(value: 'monospace', child: Text('Monospace')),
+                ],
+                onChanged: _setFontFamily,
+              ),
+            ),
+          ),
+
+          const Divider(),
+
+          // ── Connexion ────────────────────────────────────────────────────
+          _SectionHeader(label: 'Connexion'),
+
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+            child: TextField(
+              controller: _serverUrlController,
+              decoration: InputDecoration(
+                labelText: 'URL du serveur TTS',
+                hintText: 'http://192.168.0.160:8000',
+                prefixIcon: const Icon(Icons.dns_rounded),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.check_rounded),
+                  tooltip: 'Enregistrer',
+                  onPressed: () {
+                    _saveServerUrl(_serverUrlController.text);
+                    FocusScope.of(context).unfocus();
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('URL enregistrée'),
+                        backgroundColor: Colors.green,
+                        duration: Duration(seconds: 2),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              onSubmitted: _saveServerUrl,
+              keyboardType: TextInputType.url,
+            ),
           ),
         ],
       ),
     );
   }
+}
 
-  Widget _buildSectionHeader(String title) {
+class _SectionHeader extends StatelessWidget {
+  final String label;
+  const _SectionHeader({required this.label});
+
+  @override
+  Widget build(BuildContext context) {
     return Padding(
       padding: const EdgeInsets.fromLTRB(16, 16, 16, 4),
       child: Text(
-        title,
-        style: Theme.of(context).textTheme.titleSmall?.copyWith(
-              color: Theme.of(context).colorScheme.primary,
-              fontWeight: FontWeight.bold,
-            ),
-      ),
-    );
-  }
-
-  Widget _buildVoiceSelector() {
-    if (_loadingVoices) {
-      return const Padding(
-        padding: EdgeInsets.all(16),
-        child: Center(child: CircularProgressIndicator()),
-      );
-    }
-
-    if (_voices.isEmpty) {
-      return const ListTile(
-        leading: Icon(Icons.warning_amber, color: Colors.orange),
-        title: Text('Voix non disponibles'),
-        subtitle: Text('Vérifiez la connexion au backend'),
-      );
-    }
-
-    final voiceNames = _voices.map((v) => v.name).toList();
-    final currentVoice =
-        voiceNames.contains(_defaultVoice) ? _defaultVoice : voiceNames.first;
-
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      child: DropdownButton<String>(
-        value: currentVoice,
-        isExpanded: true,
-        onChanged: _saveVoice,
-        items: _voices.map((voice) {
-          return DropdownMenuItem<String>(
-            value: voice.name,
-            child: Text(voice.displayName, overflow: TextOverflow.ellipsis),
-          );
-        }).toList(),
-      ),
-    );
-  }
-
-  Widget _buildSpeedSelector() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      child: Row(
-        children: _speedOptions.map((speed) {
-          final isSelected = _defaultSpeed == speed;
-          return Padding(
-            padding: const EdgeInsets.only(right: 8),
-            child: ChoiceChip(
-              label: Text('${speed}x'),
-              selected: isSelected,
-              onSelected: (_) => _saveSpeed(speed),
-              labelStyle: TextStyle(
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
-              ),
-            ),
-          );
-        }).toList(),
+        label.toUpperCase(),
+        style: TextStyle(
+          fontSize: 11,
+          fontWeight: FontWeight.w700,
+          color: Theme.of(context).colorScheme.primary,
+          letterSpacing: 1.1,
+        ),
       ),
     );
   }

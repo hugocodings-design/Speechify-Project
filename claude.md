@@ -124,36 +124,36 @@ source venv/bin/activate  # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 python main.py  # Start on localhost:8000
 
-COMMANDED TO START BACKEND :
-cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\backend"
-venv\Scripts\activate
-$env:GOOGLE_APPLICATION_CREDENTIALS="c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\speechify-copy-bc0092c5c34f.json"
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+## Emplacement unique du projet (mis à jour 2026-08-22)
 
+Tout vit désormais sous ce seul dossier — plus de `C:\dev\speechify` séparé :
+```
+SPEECHIFY HUGO/
+├── backend/          ← serveur FastAPI (TTS)
+├── flutter_app/       ← l'application réelle (Accueil, Bibliothèque, +, Paramètres, Profil)
+└── claude.md
+```
 
-Flutter Startup
-cd flutter_app
-flutter pub get
-flutter run  # Android emulator (Windows)
+### Pour démarrer (deux terminaux)
 
-Oui, deux choses rapides :
-
-Arrêtez le serveur backend — dans le terminal où tourne uvicorn, appuyez Ctrl+C
-
-Arrêtez Flutter — dans le terminal Flutter, appuyez q
-
-C'est tout. Bonne nuit ! 🌙
-
-La prochaine fois, pour redémarrer :
-
-
+```powershell
 # Terminal 1 — Backend
 cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\backend"
 venv\Scripts\activate
-$env:GOOGLE_APPLICATION_CREDENTIALS="c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\speechify-copy-bc0092c5c34f.json"
-uvicorn main:app --reload --host 0.0.0.0 --port 8000
+$env:GOOGLE_APPLICATION_CREDENTIALS="c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\speechify-app-491902-c2f95c0c3aa3.json"
+python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+Note : utiliser `python -m uvicorn`, pas `uvicorn.exe` directement — le stub `.exe` est bloqué sur cette machine.
 
-# Terminal 2 — Flutter
-cd C:\dev\speechify
+```powershell
+# Terminal 2 — Flutter (l'app réelle, avec Accueil/Bibliothèque/Profil)
+cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\flutter_app"
 $env:PATH += ";c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\flutter_windows_3.41.5-stable\flutter\bin"
 flutter run -d R5CX81KDFJJ
+```
+
+### Pour arrêter
+- Backend : Ctrl+C dans le terminal uvicorn
+- Flutter : `q` dans le terminal flutter run
+
+⚠️ Ne jamais utiliser `flutter install` pour mettre à jour l'app sur le téléphone — ça désinstalle l'app avant de la réinstaller et efface toutes les données locales (bibliothèque, progression de lecture). Toujours utiliser `adb install -r build\app\outputs\flutter-apk\app-debug.apk`, qui préserve les données.

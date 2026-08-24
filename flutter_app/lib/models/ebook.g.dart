@@ -24,13 +24,16 @@ class EbookAdapter extends TypeAdapter<Ebook> {
       fileFormat: fields[6] as String,
       lastReadPosition: fields[3] as int,
       selectedVoiceName: fields[4] as String,
+      folderId: fields[7] as String?,
+      totalSentences: fields[8] as int? ?? 0,
+      coverImagePath: fields[9] as String?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Ebook obj) {
     writer
-      ..writeByte(7)
+      ..writeByte(10)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -44,7 +47,13 @@ class EbookAdapter extends TypeAdapter<Ebook> {
       ..writeByte(5)
       ..write(obj.uploadedAt)
       ..writeByte(6)
-      ..write(obj.fileFormat);
+      ..write(obj.fileFormat)
+      ..writeByte(7)
+      ..write(obj.folderId)
+      ..writeByte(8)
+      ..write(obj.totalSentences)
+      ..writeByte(9)
+      ..write(obj.coverImagePath);
   }
 
   @override

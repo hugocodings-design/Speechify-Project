@@ -9,7 +9,7 @@ class Ebook {
   final String id;
 
   @HiveField(1)
-  final String title;
+  String title;
 
   @HiveField(2)
   final List<Chapter> chapters;
@@ -18,13 +18,22 @@ class Ebook {
   int lastReadPosition = 0;
 
   @HiveField(4)
-  String selectedVoiceName = "en-US-Neural2-C";
+  String selectedVoiceName = "en-US-Neural2-D";
 
   @HiveField(5)
   final DateTime uploadedAt;
 
   @HiveField(6)
   final String fileFormat; // "pdf" or "epub"
+
+  @HiveField(7)
+  String? folderId; // null = dossier racine
+
+  @HiveField(8)
+  int totalSentences = 0; // nombre total de phrases du livre
+
+  @HiveField(9)
+  String? coverImagePath; // chemin local vers l'image de couverture extraite
 
   Ebook({
     required this.id,
@@ -33,7 +42,10 @@ class Ebook {
     required this.uploadedAt,
     required this.fileFormat,
     this.lastReadPosition = 0,
-    this.selectedVoiceName = "en-US-Neural2-C",
+    this.selectedVoiceName = "en-US-Neural2-D",
+    this.folderId,
+    this.totalSentences = 0,
+    this.coverImagePath,
   });
 
   int get totalWords => chapters.fold(0, (sum, ch) => sum + ch.wordCount);

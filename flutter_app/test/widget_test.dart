@@ -28,17 +28,3 @@ void main() {
     expect(find.text('1'), findsOneWidget);
   });
 }
-
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
-  @override
-  Widget build(BuildContext context) {
-    return MaterialApp(
-      home: Scaffold(
-        appBar: AppBar(title: const Text('Test')),
-        body: const Center(child: Text('0')),
-      ),
-    );
-  }
-}

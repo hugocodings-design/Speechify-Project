@@ -1,10 +1,5 @@
-import 'dart:convert';
-import 'dart:io';
-
 import 'package:just_audio/just_audio.dart';
-import 'package:just_audio_background/just_audio_background.dart';
 import 'package:logger/logger.dart';
-import 'package:path_provider/path_provider.dart';
 
 class AudioService {
   final AudioPlayer _audioPlayer = AudioPlayer();
@@ -23,32 +18,8 @@ class AudioService {
 
   /// Initialize audio session (for background playback)
   Future<void> initAudioSession() async {
-    try {
-      await _audioPlayer.setAudioSource(
-        AudioSource.uri(Uri.parse("")),
-        initialPosition: Duration.zero,
-      );
-      _logger.i('Audio session initialized');
-    } catch (e) {
-      _logger.e('Error initializing audio session: $e');
-    }
-  }
-
-  /// Décode l'audio base64 reçu du backend, sauvegarde en fichier temp et le charge
-  Future<void> loadFromBase64(String base64Audio) async {
-    try {
-      final bytes = base64Decode(base64Audio);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File(
-        '${tempDir.path}/tts_${DateTime.now().millisecondsSinceEpoch}.mp3',
-      );
-      await tempFile.writeAsBytes(bytes);
-      _logger.i('Audio temp file: ${tempFile.path}');
-      await loadAudio(tempFile.path);
-    } catch (e) {
-      _logger.e('Erreur chargement audio base64: $e');
-      rethrow;
-    }
+    // Rien à initialiser — le lecteur est prêt dès la création de l'objet
+    _logger.i('Audio session prête');
   }
 
   /// Load audio from URL or file path
@@ -56,14 +27,7 @@ class AudioService {
     try {
       _logger.i('Loading audio: $audioSourceUrl');
       await _audioPlayer.setAudioSource(
-        AudioSource.uri(
-          Uri.parse(audioSourceUrl),
-          tag: MediaItem(
-            id: audioSourceUrl,
-            title: 'Speechify',
-            artist: 'Text-to-Speech',
-          ),
-        ),
+        AudioSource.uri(Uri.parse(audioSourceUrl)),
       );
       _logger.i('Audio loaded successfully');
     } catch (e) {

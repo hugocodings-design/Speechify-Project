@@ -43,3 +43,9 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# SDK Flutter copié localement (pas du code du projet)
+/flutter/
+
+# Clés API — jamais commitées en clair
+lib/secrets.dart
