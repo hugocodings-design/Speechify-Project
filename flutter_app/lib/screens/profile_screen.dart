@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../main.dart' show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier;
 import '../services/stats_service.dart';
+import '../widgets/section_header.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -14,6 +16,48 @@ class _ProfileScreenState extends State<ProfileScreen> {
   int _selectedPeriod = 1;
 
   static const _periodLabels = ['Jour', 'Semaine', 'Mois', '6 mois', 'Année'];
+
+  // ── Paramètres (relocalisés depuis l'ancien settings_screen.dart) ────────
+  late TextEditingController _serverUrlController;
+
+  @override
+  void initState() {
+    super.initState();
+    final settings = Hive.box('settings');
+    _serverUrlController = TextEditingController(
+      text: settings.get('serverUrl', defaultValue: 'http://192.168.0.160:8000') as String,
+    );
+  }
+
+  @override
+  void dispose() {
+    _serverUrlController.dispose();
+    super.dispose();
+  }
+
+  void _saveServerUrl(String value) {
+    Hive.box('settings').put('serverUrl', value.trim());
+  }
+
+  void _setTheme(ThemeMode mode) {
+    themeModeNotifier.value = mode;
+    final key = mode == ThemeMode.light
+        ? 'light'
+        : mode == ThemeMode.dark
+            ? 'dark'
+            : 'system';
+    Hive.box('settings').put('themeMode', key);
+  }
+
+  void _setFontSize(double size) {
+    fontSizeNotifier.value = size;
+    Hive.box('settings').put('fontSize', size);
+  }
+
+  void _setFontFamily(String? family) {
+    fontFamilyNotifier.value = family;
+    Hive.box('settings').put('fontFamily', family);
+  }
 
   DateTimeRange _getRange() {
     final now = DateTime.now();
@@ -62,7 +106,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
           }
 
           return SingleChildScrollView(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 100),
+            padding: const EdgeInsets.fromLTRB(16, 16, 16, 40),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -148,11 +192,154 @@ class _ProfileScreenState extends State<ProfileScreen> {
                     ),
                   ),
                 ],
+
+                // ── Paramètres (relocalisés depuis l'onglet Paramètres) ──────
+                const SizedBox(height: 16),
+                const Divider(),
+                _buildSettingsSection(context),
               ],
             ),
           );
         },
       ),
+    );
+  }
+
+  Widget _buildSettingsSection(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // ── Apparence ────────────────────────────────────────────────────
+        const SectionHeader(label: 'Apparence'),
+
+        ValueListenableBuilder<ThemeMode>(
+          valueListenable: themeModeNotifier,
+          builder: (context, themeMode, _) => Column(
+            children: [
+              RadioListTile<ThemeMode>(
+                title: const Text('Système'),
+                secondary: const Icon(Icons.brightness_auto_rounded),
+                value: ThemeMode.system,
+                groupValue: themeMode,
+                onChanged: (v) => _setTheme(v!),
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('Clair'),
+                secondary: const Icon(Icons.light_mode_rounded),
+                value: ThemeMode.light,
+                groupValue: themeMode,
+                onChanged: (v) => _setTheme(v!),
+              ),
+              RadioListTile<ThemeMode>(
+                title: const Text('Sombre'),
+                secondary: const Icon(Icons.dark_mode_rounded),
+                value: ThemeMode.dark,
+                groupValue: themeMode,
+                onChanged: (v) => _setTheme(v!),
+              ),
+            ],
+          ),
+        ),
+
+        const Divider(),
+
+        // ── Texte ────────────────────────────────────────────────────────
+        const SectionHeader(label: 'Texte'),
+
+        ValueListenableBuilder<double>(
+          valueListenable: fontSizeNotifier,
+          builder: (context, fontSize, _) => Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.format_size_rounded),
+                title: const Text('Taille du texte'),
+                trailing: Text(
+                  '${fontSize.toInt()} pt',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Row(
+                  children: [
+                    const Text('A', style: TextStyle(fontSize: 12)),
+                    Expanded(
+                      child: Slider(
+                        value: fontSize,
+                        min: 12,
+                        max: 28,
+                        divisions: 8,
+                        onChanged: _setFontSize,
+                      ),
+                    ),
+                    const Text('A', style: TextStyle(fontSize: 22)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        ValueListenableBuilder<String?>(
+          valueListenable: fontFamilyNotifier,
+          builder: (context, fontFamily, _) => ListTile(
+            leading: const Icon(Icons.font_download_rounded),
+            title: const Text('Police'),
+            trailing: DropdownButton<String?>(
+              value: fontFamily,
+              underline: const SizedBox(),
+              items: const [
+                DropdownMenuItem(value: null, child: Text('Défaut')),
+                DropdownMenuItem(value: 'Georgia', child: Text('Georgia')),
+                DropdownMenuItem(value: 'serif', child: Text('Serif')),
+                DropdownMenuItem(value: 'monospace', child: Text('Monospace')),
+              ],
+              onChanged: _setFontFamily,
+            ),
+          ),
+        ),
+
+        const Divider(),
+
+        // ── Connexion ────────────────────────────────────────────────────
+        const SectionHeader(label: 'Connexion'),
+
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+          child: TextField(
+            controller: _serverUrlController,
+            decoration: InputDecoration(
+              labelText: 'URL du serveur TTS',
+              hintText: 'http://192.168.0.160:8000',
+              prefixIcon: const Icon(Icons.dns_rounded),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.check_rounded),
+                tooltip: 'Enregistrer',
+                onPressed: () {
+                  _saveServerUrl(_serverUrlController.text);
+                  FocusScope.of(context).unfocus();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('URL enregistrée'),
+                      backgroundColor: Colors.green,
+                      duration: Duration(seconds: 2),
+                    ),
+                  );
+                },
+              ),
+            ),
+            onSubmitted: _saveServerUrl,
+            keyboardType: TextInputType.url,
+          ),
+        ),
+      ],
     );
   }
 }

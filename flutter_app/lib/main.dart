@@ -6,6 +6,7 @@ import 'models/ebook.dart';
 import 'models/chapter.dart';
 import 'models/audio_chunk.dart';
 import 'models/folder.dart';
+import 'models/annotation.dart';
 import 'screens/main_screen.dart';
 import 'services/speechify_audio_handler.dart';
 
@@ -78,10 +79,12 @@ void main() async {
   Hive.registerAdapter(ChapterAdapter());
   Hive.registerAdapter(AudioChunkAdapter());
   Hive.registerAdapter(FolderAdapter());
+  Hive.registerAdapter(AnnotationAdapter());
 
   // Ouvrir les boxes persistantes
   await Hive.openBox<Folder>('folders');
   await Hive.openBox<Ebook>('ebooks');
+  await Hive.openBox<Annotation>('annotations');
   await Hive.openBox('reading_stats');
   final settings = await Hive.openBox('settings');
 

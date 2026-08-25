@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:audio_session/audio_session.dart';
+import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/rendering.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -7,6 +8,7 @@ import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../models/ebook.dart';
+import '../models/annotation.dart';
 import '../services/tts_service.dart' show TtsService, Voice;
 import '../services/local_tts_service.dart';
 import '../main.dart' show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, audioHandler, ensureAudioHandler;
@@ -38,7 +40,12 @@ class _SentenceItem extends _BookItem {
 class _ParagraphItem extends _BookItem {
   final List<int> sentenceIndices;
   final int chapterIndex;
-  const _ParagraphItem(this.sentenceIndices, this.chapterIndex);
+  /// Index du paragraphe au sein de son chapitre (0, 1, 2...) — identifiant
+  /// stable pour une annotation, contrairement aux index de phrase globaux
+  /// qui dépendent de l'ensemble du livre.
+  final int paragraphIndexInChapter;
+  const _ParagraphItem(
+      this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter);
 }
 
 /// Un paragraphe de texte avec un surlignage arrondi dessiné derrière —
@@ -60,6 +67,24 @@ class _HighlightedParagraph extends StatelessWidget {
   /// taille avant layout(), sinon il plante.
   final int placeholderCount;
 
+  /// Sélection tactile en cours (surlignage à sauvegarder) — distincte du
+  /// surlignage de lecture.
+  final TextRange? selectionRange;
+  final Color selectionColor;
+
+  /// Passages déjà sauvegardés dans ce paragraphe (persistants d'une
+  /// ouverture à l'autre du livre).
+  final List<TextRange> savedHighlights;
+  final Color savedHighlightColor;
+
+  /// Résout une position locale en un mot (via TextPainter.getWordBoundary)
+  /// et le remonte à l'écran parent — null désactive le geste (paragraphes
+  /// qui n'ont pas besoin d'être sélectionnables, aucun cas aujourd'hui mais
+  /// garde la porte ouverte).
+  final void Function(TextRange word)? onLongPressStart;
+  final void Function(TextRange word)? onLongPressMoveUpdate;
+  final VoidCallback? onLongPressEnd;
+
   const _HighlightedParagraph({
     required this.text,
     required this.sentenceRange,
@@ -67,6 +92,13 @@ class _HighlightedParagraph extends StatelessWidget {
     required this.sentenceColor,
     required this.wordColor,
     required this.placeholderCount,
+    this.selectionRange,
+    this.selectionColor = Colors.transparent,
+    this.savedHighlights = const [],
+    this.savedHighlightColor = Colors.transparent,
+    this.onLongPressStart,
+    this.onLongPressMoveUpdate,
+    this.onLongPressEnd,
   });
 
   @override
@@ -96,20 +128,54 @@ class _HighlightedParagraph extends StatelessWidget {
               ));
             }
             painter.layout(maxWidth: constraints.maxWidth);
+            final paragraphSize = Size(constraints.maxWidth, painter.height);
 
-            return CustomPaint(
-              size: Size(constraints.maxWidth, painter.height),
-              painter: (sentenceRange != null || wordRange != null)
+            // Traduit une position locale en un mot, en la bornant d'abord
+            // aux limites du paragraphe : un glissement qui sort visuellement
+            // du paragraphe (au-dessus/en dessous) reste ainsi accroché à son
+            // premier/dernier mot plutôt que de tenter de sélectionner un
+            // autre paragraphe (portée v1 : sélection à un seul paragraphe).
+            TextRange wordAt(Offset local) {
+              final clamped = Offset(
+                local.dx.clamp(0.0, paragraphSize.width),
+                local.dy.clamp(0.0, paragraphSize.height),
+              );
+              final pos = painter.getPositionForOffset(clamped);
+              return painter.getWordBoundary(pos);
+            }
+
+            Widget content = CustomPaint(
+              size: paragraphSize,
+              painter: (sentenceRange != null ||
+                      wordRange != null ||
+                      selectionRange != null ||
+                      savedHighlights.isNotEmpty)
                   ? _HighlightPainter(
                       textPainter: painter,
                       sentenceRange: sentenceRange,
                       wordRange: wordRange,
                       sentenceColor: sentenceColor,
                       wordColor: wordColor,
+                      selectionRange: selectionRange,
+                      selectionColor: selectionColor,
+                      savedHighlights: savedHighlights,
+                      savedHighlightColor: savedHighlightColor,
                     )
                   : null,
               child: RichText(text: text, textAlign: TextAlign.justify),
             );
+
+            if (onLongPressStart != null) {
+              content = GestureDetector(
+                onLongPressStart: (d) => onLongPressStart!(wordAt(d.localPosition)),
+                onLongPressMoveUpdate: (d) =>
+                    onLongPressMoveUpdate?.call(wordAt(d.localPosition)),
+                onLongPressEnd: (_) => onLongPressEnd?.call(),
+                child: content,
+              );
+            }
+
+            return content;
           } catch (_) {
             return RichText(text: text, textAlign: TextAlign.justify);
           }
@@ -125,6 +191,10 @@ class _HighlightPainter extends CustomPainter {
   final TextRange? wordRange;
   final Color sentenceColor;
   final Color wordColor;
+  final TextRange? selectionRange;
+  final Color selectionColor;
+  final List<TextRange> savedHighlights;
+  final Color savedHighlightColor;
 
   _HighlightPainter({
     required this.textPainter,
@@ -132,15 +202,28 @@ class _HighlightPainter extends CustomPainter {
     required this.wordRange,
     required this.sentenceColor,
     required this.wordColor,
+    this.selectionRange,
+    this.selectionColor = Colors.transparent,
+    this.savedHighlights = const [],
+    this.savedHighlightColor = Colors.transparent,
   });
 
   @override
   void paint(Canvas canvas, Size size) {
+    // Les surlignages sauvegardés se peignent en premier (dessous) : la
+    // lecture en cours doit rester visible par-dessus si elle chevauche un
+    // passage déjà surligné.
+    for (final range in savedHighlights) {
+      _paintRange(canvas, range, savedHighlightColor, 3);
+    }
     if (sentenceRange != null) {
       _paintRange(canvas, sentenceRange!, sentenceColor, 3);
     }
     if (wordRange != null) {
       _paintRange(canvas, wordRange!, wordColor, 3);
+    }
+    if (selectionRange != null) {
+      _paintRange(canvas, selectionRange!, selectionColor, 3);
     }
   }
 
@@ -173,6 +256,8 @@ class _HighlightPainter extends CustomPainter {
   bool shouldRepaint(covariant _HighlightPainter oldDelegate) {
     return oldDelegate.sentenceRange != sentenceRange ||
         oldDelegate.wordRange != wordRange ||
+        oldDelegate.selectionRange != selectionRange ||
+        !listEquals(oldDelegate.savedHighlights, savedHighlights) ||
         oldDelegate.textPainter.text != textPainter.text;
   }
 }
@@ -181,7 +266,11 @@ class _HighlightPainter extends CustomPainter {
 
 class ReaderScreen extends StatefulWidget {
   final Ebook ebook;
-  const ReaderScreen({Key? key, required this.ebook}) : super(key: key);
+  /// Si fourni, l'écran défile jusqu'à ce passage sauvegardé à l'ouverture
+  /// (venant de l'onglet Annotations).
+  final Annotation? jumpToAnnotation;
+  const ReaderScreen({Key? key, required this.ebook, this.jumpToAnnotation})
+      : super(key: key);
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -198,6 +287,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
   final List<_BookItem> _displayItems = [];
   final List<_SentenceItem> _sentences = [];
   final Map<int, int> _chapterDisplayIndex = {};
+
+  // ── Sélection tactile (surlignage à sauvegarder) ─────────────────────────
+  // Identité du _ParagraphItem en cours de sélection (v1 : un seul
+  // paragraphe à la fois — voir _HighlightedParagraph.wordAt).
+  _ParagraphItem? _selectingParagraph;
+  TextRange? _selectionAnchorWord;
+  // Photo du texte aplati du paragraphe au moment du début de la sélection —
+  // sert à extraire l'extrait sélectionné sans reconstruire tout le span.
+  String? _selectionParagraphPlainText;
+  final ValueNotifier<TextRange?> _selectionRangeNotifier = ValueNotifier(null);
+  late Box<Annotation> _annotationBox;
+  // ebook.id -> chapterId -> paragraphIndexInChapter -> annotations, pour un
+  // lookup bon marché depuis _buildParagraphWidget (appelé à chaque frame
+  // pour le paragraphe en cours de lecture).
+  Map<String, Map<int, List<Annotation>>> _savedHighlightsByChapter = {};
 
   // Une GlobalKey par phrase pour ensureVisible précis
   final Map<int, GlobalKey> _sentenceKeys = {};
@@ -258,16 +362,193 @@ class _ReaderScreenState extends State<ReaderScreen> {
     super.initState();
     _ttsService = TtsService();
     _buildFlatList();
+    _annotationBox = Hive.box<Annotation>('annotations');
+    _loadSavedHighlights();
     // Restaurer la position de lecture sauvegardée
     final saved = widget.ebook.lastReadPosition;
     if (saved > 0 && saved < _sentences.length) {
       _currentGlobalIndex = saved;
+    }
+    // Un saut vers une annotation prime sur la position sauvegardée.
+    final jump = widget.jumpToAnnotation;
+    final jumpIndex = jump == null ? null : _findGlobalIndexForAnnotation(jump);
+    if (jumpIndex != null) {
+      _currentGlobalIndex = jumpIndex;
     }
     _configureAudioSession();
     _startHandlerSession(); // async, intentionnellement non-awaited
     _initializeScreen();
     fontSizeNotifier.addListener(_onFontChanged);
     fontFamilyNotifier.addListener(_onFontChanged);
+    if (jumpIndex != null) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _scrollToSentence(jumpIndex, animate: false);
+      });
+    }
+  }
+
+  /// Regroupe les annotations sauvegardées de ce livre par chapitre +
+  /// paragraphe, pour un lookup bon marché dans _buildParagraphWidget.
+  void _loadSavedHighlights() {
+    final map = <String, Map<int, List<Annotation>>>{};
+    for (final a in _annotationBox.values) {
+      if (a.ebookId != widget.ebook.id) continue;
+      map
+          .putIfAbsent(a.chapterId, () => {})
+          .putIfAbsent(a.paragraphIndexInChapter, () => [])
+          .add(a);
+    }
+    _savedHighlightsByChapter = map;
+  }
+
+  /// Retrouve la première phrase du paragraphe visé par une annotation, pour
+  /// pouvoir y défiler — null si le livre a changé de structure entre-temps
+  /// (ré-import) et que le paragraphe n'existe plus tel quel.
+  int? _findGlobalIndexForAnnotation(Annotation a) {
+    for (final item in _displayItems) {
+      if (item is _ParagraphItem &&
+          item.chapterIndex < widget.ebook.chapters.length &&
+          widget.ebook.chapters[item.chapterIndex].id == a.chapterId &&
+          item.paragraphIndexInChapter == a.paragraphIndexInChapter &&
+          item.sentenceIndices.isNotEmpty) {
+        return item.sentenceIndices.first;
+      }
+    }
+    return null;
+  }
+
+  // ── Sélection tactile (surlignage) ────────────────────────────────────────
+
+  void _onSelectionStart(_ParagraphItem para, TextRange word, String plainText) {
+    setState(() {
+      _selectingParagraph = para;
+      _selectionAnchorWord = word;
+      _selectionParagraphPlainText = plainText;
+    });
+    _selectionRangeNotifier.value = word;
+  }
+
+  void _onSelectionUpdate(_ParagraphItem para, TextRange word) {
+    if (!identical(_selectingParagraph, para)) return;
+    final anchor = _selectionAnchorWord;
+    if (anchor == null) return;
+    final start = anchor.start < word.start ? anchor.start : word.start;
+    final end = anchor.end > word.end ? anchor.end : word.end;
+    _selectionRangeNotifier.value = TextRange(start: start, end: end);
+  }
+
+  void _onSelectionEnd(_ParagraphItem para) {
+    // L'état (_selectingParagraph, _selectionRangeNotifier) est déjà à jour
+    // à ce stade — la barre de confirmation les observe directement, rien à
+    // faire de plus ici.
+  }
+
+  void _cancelSelection() {
+    setState(() {
+      _selectingParagraph = null;
+      _selectionAnchorWord = null;
+      _selectionParagraphPlainText = null;
+    });
+    _selectionRangeNotifier.value = null;
+  }
+
+  Future<void> _saveSelectionAsAnnotation() async {
+    final para = _selectingParagraph;
+    final range = _selectionRangeNotifier.value;
+    final plainText = _selectionParagraphPlainText;
+    if (para == null || range == null || plainText == null) {
+      _cancelSelection();
+      return;
+    }
+
+    final start = range.start.clamp(0, plainText.length);
+    final end = range.end.clamp(0, plainText.length);
+    if (start >= end) {
+      _cancelSelection();
+      return;
+    }
+    // Le caractère objet des ancres invisibles (voir _buildParagraphWidget)
+    // peut se retrouver en bord de sélection — trim() l'élimine avec le
+    // reste des espaces superflus.
+    final selectedText = plainText.substring(start, end).trim();
+    if (selectedText.isEmpty) {
+      _cancelSelection();
+      return;
+    }
+
+    final chapter = widget.ebook.chapters[para.chapterIndex];
+    final annotation = Annotation(
+      id: 'anno_${DateTime.now().microsecondsSinceEpoch}',
+      ebookId: widget.ebook.id,
+      chapterId: chapter.id,
+      paragraphIndexInChapter: para.paragraphIndexInChapter,
+      startOffset: start,
+      endOffset: end,
+      selectedText: selectedText,
+      createdAt: DateTime.now(),
+    );
+    await _annotationBox.put(annotation.id, annotation);
+    if (!mounted) return;
+
+    setState(() {
+      _savedHighlightsByChapter
+          .putIfAbsent(chapter.id, () => {})
+          .putIfAbsent(para.paragraphIndexInChapter, () => [])
+          .add(annotation);
+      _selectingParagraph = null;
+      _selectionAnchorWord = null;
+      _selectionParagraphPlainText = null;
+    });
+    _selectionRangeNotifier.value = null;
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Passage surligné')),
+    );
+  }
+
+  Widget _buildSelectionBar() {
+    return ValueListenableBuilder<TextRange?>(
+      valueListenable: _selectionRangeNotifier,
+      builder: (context, range, _) {
+        if (_selectingParagraph == null || range == null) {
+          return const SizedBox.shrink();
+        }
+        final plainText = _selectionParagraphPlainText ?? '';
+        final start = range.start.clamp(0, plainText.length);
+        final end = range.end.clamp(0, plainText.length);
+        final preview = start < end ? plainText.substring(start, end).trim() : '';
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+          decoration: BoxDecoration(
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            border: Border(top: BorderSide(color: Colors.grey[300]!)),
+          ),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  preview.isEmpty ? '…' : '« $preview »',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.bodyMedium,
+                ),
+              ),
+              TextButton(
+                onPressed: _cancelSelection,
+                child: const Text('Annuler'),
+              ),
+              const SizedBox(width: 4),
+              FilledButton.icon(
+                onPressed: _saveSelectionAsAnnotation,
+                icon: const Icon(Icons.border_color_rounded, size: 18),
+                label: const Text('Surligner'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   /// Un changement de taille/police reconstruit entièrement la liste (voir
@@ -430,6 +711,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final baseColor = Theme.of(context).textTheme.bodyLarge?.color ?? Colors.black;
     final containsCurrent = para.sentenceIndices.contains(_currentGlobalIndex);
     final wordNotifier = audioHandler?.currentWordIndexNotifier;
+    final chapterId = widget.ebook.chapters[para.chapterIndex].id;
+    final savedRanges = (_savedHighlightsByChapter[chapterId]?[para.paragraphIndexInChapter] ?? const [])
+        .map((a) => TextRange(start: a.startOffset, end: a.endOffset))
+        .toList();
+    final isSelectingThis = identical(_selectingParagraph, para);
 
     return KeyedSubtree(
       key: paraKey,
@@ -492,7 +778,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
             final fullSpan = TextSpan(style: baseStyle, children: spans);
 
-            Widget buildParagraph(int activeWordIndex) {
+            Widget buildParagraph(int activeWordIndex, TextRange? selection) {
               TextRange? wordRange;
               final sStart = sentenceStart;
               if (sStart != null && activeWordIndex >= 0) {
@@ -517,16 +803,38 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 sentenceColor: primary.withOpacity(0.18),
                 wordColor: primary.withOpacity(0.45),
                 placeholderCount: para.sentenceIndices.length,
+                selectionRange: selection,
+                selectionColor: Colors.amber.withOpacity(0.45),
+                savedHighlights: savedRanges,
+                savedHighlightColor: Colors.amber.withOpacity(0.28),
+                onLongPressStart: (word) =>
+                    _onSelectionStart(para, word, fullSpan.toPlainText()),
+                onLongPressMoveUpdate: (word) => _onSelectionUpdate(para, word),
+                onLongPressEnd: () => _onSelectionEnd(para),
               );
             }
 
-            // Seul le paragraphe contenant la phrase en cours a besoin de se
-            // reconstruire à chaque changement de mot (~25ms) — les autres
-            // restent statiques, pour ne pas ralentir tout le reste de la page.
-            if (!containsCurrent || wordNotifier == null) return buildParagraph(-1);
-            return ValueListenableBuilder<int>(
-              valueListenable: wordNotifier,
-              builder: (context, wordIdx, _) => buildParagraph(wordIdx),
+            Widget withWordTracking(TextRange? selection) {
+              // Seul le paragraphe contenant la phrase en cours a besoin de se
+              // reconstruire à chaque changement de mot (~25ms) — les autres
+              // restent statiques, pour ne pas ralentir tout le reste de la page.
+              if (!containsCurrent || wordNotifier == null) {
+                return buildParagraph(-1, selection);
+              }
+              return ValueListenableBuilder<int>(
+                valueListenable: wordNotifier,
+                builder: (context, wordIdx, _) => buildParagraph(wordIdx, selection),
+              );
+            }
+
+            // Seul le paragraphe en cours de sélection a besoin d'écouter le
+            // notifier de sélection (partagé par tous les paragraphes) — les
+            // autres passent directement `null`, sans s'abonner, pour ne pas
+            // se reconstruire à chaque déplacement du doigt ailleurs.
+            if (!isSelectingThis) return withWordTracking(null);
+            return ValueListenableBuilder<TextRange?>(
+              valueListenable: _selectionRangeNotifier,
+              builder: (context, selection, _) => withWordTracking(selection),
             );
           },
         ),
@@ -543,6 +851,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       final chapter = widget.ebook.chapters[ci];
       _chapterDisplayIndex[ci] = _displayItems.length;
       _displayItems.add(_ChapterHeader(chapter.title, ci));
+      var paraIndexInChapter = 0;
 
       // Séparer en paragraphes (double saut de ligne ou saut simple)
       final rawParagraphs = chapter.textContent
@@ -571,7 +880,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
           globalIndex++;
         }
 
-        _displayItems.add(_ParagraphItem(paraIndices, ci));
+        _displayItems.add(_ParagraphItem(paraIndices, ci, paraIndexInChapter));
+        paraIndexInChapter++;
       }
     }
   }
@@ -1978,6 +2288,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
           ),
 
+          // ── Barre de confirmation de sélection ───────────────────────────
+          _buildSelectionBar(),
+
           // ── Contrôles fixes en bas ───────────────────────────────────────
           if (_readerVisible) Container(
             padding: EdgeInsets.fromLTRB(16, 10, 16, MediaQuery.of(context).padding.bottom + 14),
@@ -2167,6 +2480,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     fontSizeNotifier.removeListener(_onFontChanged);
     fontFamilyNotifier.removeListener(_onFontChanged);
     _playerStateSub?.cancel();
+    _selectionRangeNotifier.dispose();
     // On ne reset plus jamais ici, même en pause — sinon la session (et donc
     // le mini-lecteur affiché sur les autres onglets) disparaît dès qu'on
     // quitte le livre sans être en train de lire. La session est de toute

@@ -8,7 +8,7 @@ import 'home_screen.dart';
 import 'recent_screen.dart';
 import 'profile_screen.dart';
 import 'scan/camera_capture_screen.dart';
-import 'settings_screen.dart';
+import 'annotations_screen.dart';
 import '../widgets/mini_player.dart';
 
 class MainScreen extends StatefulWidget {
@@ -165,7 +165,7 @@ class _MainScreenState extends State<MainScreen> {
               children: const [
                 RecentScreen(),     // 0 — Accueil
                 HomeScreen(),       // 1 — Bibliothèque
-                SettingsScreen(),   // 2 — Paramètres
+                AnnotationsScreen(),   // 2 — Annotations
                 ProfileScreen(),    // 3 — Profil
               ],
             ),
@@ -217,8 +217,8 @@ class _MainScreenState extends State<MainScreen> {
             ),
             Expanded(
               child: _NavItem(
-                icon: Icons.settings_rounded,
-                label: 'Paramètres',
+                icon: Icons.border_color_rounded,
+                label: 'Annotations',
                 index: 2,
                 currentIndex: _currentIndex,
                 onTap: _onNavTap,
