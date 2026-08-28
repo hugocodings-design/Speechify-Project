@@ -7,6 +7,8 @@ import 'models/chapter.dart';
 import 'models/audio_chunk.dart';
 import 'models/folder.dart';
 import 'models/annotation.dart';
+import 'models/dictionary_entry.dart';
+import 'models/translation_entry.dart';
 import 'screens/main_screen.dart';
 import 'services/speechify_audio_handler.dart';
 
@@ -14,6 +16,18 @@ import 'services/speechify_audio_handler.dart';
 final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.system);
 final ValueNotifier<String?> fontFamilyNotifier = ValueNotifier(null);
 final ValueNotifier<double> fontSizeNotifier = ValueNotifier(16.0);
+
+/// Langue dans laquelle Gemini rédige les définitions du dictionnaire.
+/// Code court ISO ('fr', 'en', 'pt', 'es') et non une locale complète comme
+/// pour les voix TTS ('fr-FR'). Réglable séparément de
+/// translationLanguageNotifier ci-dessous : rien n'oblige à vouloir lire les
+/// définitions et la traduction en direct dans la même langue.
+final ValueNotifier<String> dictionaryLanguageNotifier = ValueNotifier('fr');
+
+/// Langue de la traduction en direct/manuelle pendant la lecture (Google
+/// Cloud Translation) — voir dictionaryLanguageNotifier ci-dessus pour la
+/// raison de la séparation.
+final ValueNotifier<String> translationLanguageNotifier = ValueNotifier('fr');
 
 // Handler audio global pour la notification de lecture en arrière-plan
 SpeechifyAudioHandler? audioHandler;
@@ -80,12 +94,34 @@ void main() async {
   Hive.registerAdapter(AudioChunkAdapter());
   Hive.registerAdapter(FolderAdapter());
   Hive.registerAdapter(AnnotationAdapter());
+  Hive.registerAdapter(DictionaryEntryAdapter());
+  Hive.registerAdapter(TranslationEntryAdapter());
 
   // Ouvrir les boxes persistantes
   await Hive.openBox<Folder>('folders');
   await Hive.openBox<Ebook>('ebooks');
-  await Hive.openBox<Annotation>('annotations');
+  final annotationBox = await Hive.openBox<Annotation>('annotations');
+  await _cleanupAnnotationArtifacts(annotationBox);
   await Hive.openBox('reading_stats');
+  // 'dictionary' : les mots enregistrés par l'utilisateur (liste de
+  // vocabulaire, par livre et tous livres confondus — voir DictionaryEntry).
+  // 'dictionary_cache' : box séparée, NON affichée à l'utilisateur, qui
+  // mémorise le résultat de CHAQUE recherche (même non enregistrée) pour que
+  // ré-chercher un mot déjà vu soit gratuit et fonctionne hors-ligne — voir
+  // DictionaryService. Les deux doivent être ouvertes ici, avant runApp :
+  // annotations_screen.dart (et bientôt l'onglet Dictionnaire) utilisent
+  // Hive.box<...>() de façon SYNCHRONE, qui lève une HiveError si la box
+  // n'a pas déjà été ouverte.
+  await _openBoxOrResetIfCorrupt<DictionaryEntry>('dictionary');
+  await _openBoxOrResetIfCorrupt('dictionary_cache');
+  // Cache des traductions à la volée pendant la lecture (voir
+  // TranslationService) — jamais affichée à l'utilisateur, juste là pour
+  // que relire un livre déjà lu ne coûte plus rien et marche hors-ligne.
+  await _openBoxOrResetIfCorrupt('translation_cache');
+  // 'translations' : mots/phrases traduits manuellement et enregistrés par
+  // l'utilisateur (bouton "Traduire" dans la barre de sélection) — voir
+  // TranslationEntry. Distincte de translation_cache ci-dessus.
+  await _openBoxOrResetIfCorrupt<TranslationEntry>('translations');
   final settings = await Hive.openBox('settings');
 
   // Restaurer les préférences sauvegardées
@@ -93,8 +129,68 @@ void main() async {
   themeModeNotifier.value = _parseThemeMode(savedTheme);
   fontFamilyNotifier.value = settings.get('fontFamily') as String?;
   fontSizeNotifier.value = (settings.get('fontSize', defaultValue: 16.0) as num).toDouble();
+  dictionaryLanguageNotifier.value =
+      settings.get('dictionaryLanguage', defaultValue: 'fr') as String;
+  translationLanguageNotifier.value =
+      settings.get('translationLanguage', defaultValue: 'fr') as String;
 
   runApp(const SpeechifyApp());
+}
+
+/// Ouvre une box Hive, et si sa lecture échoue (typiquement un
+/// TypeError/HiveError parce que le SCHÉMA d'un modèle a changé entre deux
+/// versions de l'app — ex: DictionaryEntry a perdu ses champs de traduction
+/// lors de la simplification du dictionnaire), supprime le fichier de la
+/// box et la rouvre vide plutôt que de planter l'app entière au démarrage.
+/// N'affecte QUE cette box précise : les autres (ebooks, annotations...)
+/// restent intactes. Acceptable ici parce que 'dictionary'/'dictionary_cache'
+/// ne contiennent que quelques mots de test à ce stade, jamais une
+/// bibliothèque ou une progression de lecture.
+Future<void> _openBoxOrResetIfCorrupt<T>(String name) async {
+  try {
+    final box = await Hive.openBox<T>(name);
+    // openBox ne lit pas forcément chaque valeur elle-même — forcer une
+    // lecture complète ici pour détecter un schéma incompatible tout de
+    // suite, plutôt que plus tard au premier accès depuis l'UI.
+    box.values.toList();
+  } catch (e) {
+    debugPrint('⚠️ Box "$name" illisible ($e) — réinitialisation');
+    await Hive.deleteBoxFromDisk(name);
+    await Hive.openBox<T>(name);
+  }
+}
+
+// Nettoyage ponctuel des annotations sauvegardées avant le correctif qui
+// retire le caractère objet (U+FFFC) des ancres de phrase invisibles — ce
+// caractère pouvait se retrouver au milieu du texte surligné quand la
+// sélection traversait plusieurs phrases, et s'affichait comme un petit
+// carré "obj". Se relance à chaque démarrage mais ne réécrit rien une fois
+// toutes les annotations propres (comparaison avant/après).
+Future<void> _cleanupAnnotationArtifacts(Box<Annotation> box) async {
+  for (final key in box.keys.toList()) {
+    final a = box.get(key);
+    if (a == null) continue;
+    final cleaned = a.selectedText
+        .replaceAll('￼', '')
+        .replaceAll(RegExp(r' {2,}'), ' ')
+        .trim();
+    if (cleaned != a.selectedText) {
+      await box.put(
+        key,
+        Annotation(
+          id: a.id,
+          ebookId: a.ebookId,
+          chapterId: a.chapterId,
+          paragraphIndexInChapter: a.paragraphIndexInChapter,
+          startOffset: a.startOffset,
+          endOffset: a.endOffset,
+          selectedText: cleaned,
+          createdAt: a.createdAt,
+          note: a.note,
+        ),
+      );
+    }
+  }
 }
 
 ThemeMode _parseThemeMode(String value) {

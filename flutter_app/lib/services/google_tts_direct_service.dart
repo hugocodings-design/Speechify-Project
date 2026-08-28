@@ -101,8 +101,22 @@ class GoogleTtsDirectService {
     throw Exception('Synthesis failed after retries');
   }
 
+  /// Caractères de contrôle C0 (0x00-0x1F, sauf tabulation/LF/CR) : illégaux
+  /// en XML 1.0 quelle que soit leur position, donc dans le SSML aussi —
+  /// mais AUCUN échappement (&amp;/&lt;/&gt;) ne peut les rendre valides,
+  /// contrairement aux caractères spéciaux normaux. Une extraction PDF
+  /// bancale peut en laisser un en PLEIN MILIEU d'un mot par ailleurs
+  /// parfait (ex: "la⟨0x02⟩tter" au lieu de "latter"), invisible à l'écran
+  /// mais qui fait rejeter toute la phrase par l'API Google TTS avec un
+  /// générique "Request contains an invalid argument." — sans rien à voir
+  /// avec le contenu texte apparent, ce qui le rend très difficile à
+  /// repérer sans regarder les points de code un par un.
+  static final RegExp _invalidXmlControlChars =
+      RegExp(r'[\x00-\x08\x0B\x0C\x0E-\x1F]');
+
   String _xmlEscape(String text) {
     return text
+        .replaceAll(_invalidXmlControlChars, '')
         .replaceAll('&', '&amp;')
         .replaceAll('<', '&lt;')
         .replaceAll('>', '&gt;');

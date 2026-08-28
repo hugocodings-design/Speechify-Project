@@ -11,11 +11,19 @@ import '../models/ebook.dart';
 import '../models/annotation.dart';
 import '../services/tts_service.dart' show TtsService, Voice;
 import '../services/local_tts_service.dart';
-import '../main.dart' show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, audioHandler, ensureAudioHandler;
+import '../services/dictionary_service.dart';
+import '../services/translation_service.dart';
+import '../main.dart'
+    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
+        translationLanguageNotifier,
+        audioHandler, ensureAudioHandler;
 import '../services/stats_service.dart';
 import '../data/voice_characters.dart';
 import '../data/cloud_voices.dart';
 import '../widgets/voice_avatar.dart';
+import '../widgets/translation_sheet.dart';
+import '../widgets/dictionary_sheet.dart';
+import 'annotations_screen.dart';
 
 // ─── Modèles internes ────────────────────────────────────────────────────────
 
@@ -46,6 +54,14 @@ class _ParagraphItem extends _BookItem {
   final int paragraphIndexInChapter;
   const _ParagraphItem(
       this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter);
+}
+
+/// Contenu de la bulle « mot sous le doigt » (voir _showSelectionBubble) :
+/// le mot courant et la position (globale, écran) du doigt à cet instant.
+class _SelectionBubbleData {
+  final String text;
+  final Offset position;
+  const _SelectionBubbleData(this.text, this.position);
 }
 
 /// Un paragraphe de texte avec un surlignage arrondi dessiné derrière —
@@ -81,9 +97,22 @@ class _HighlightedParagraph extends StatelessWidget {
   /// et le remonte à l'écran parent — null désactive le geste (paragraphes
   /// qui n'ont pas besoin d'être sélectionnables, aucun cas aujourd'hui mais
   /// garde la porte ouverte).
-  final void Function(TextRange word)? onLongPressStart;
-  final void Function(TextRange word)? onLongPressMoveUpdate;
+  /// [wordText] et [globalPosition] alimentent la bulle qui montre le mot
+  /// sous le doigt pendant la sélection (voir _ReaderScreenState).
+  final void Function(TextRange word, String wordText, Offset globalPosition)?
+      onLongPressStart;
+  final void Function(TextRange word, String wordText, Offset globalPosition)?
+      onLongPressMoveUpdate;
   final VoidCallback? onLongPressEnd;
+
+  /// Poignées de sélection : permettent d'ajuster le début/la fin d'une
+  /// sélection déjà posée (même après avoir relâché le doigt initial), sans
+  /// devoir tout recommencer si le premier appui a ciblé le mauvais mot.
+  final void Function(TextRange word, String wordText, Offset globalPosition)?
+      onStartHandleDrag;
+  final void Function(TextRange word, String wordText, Offset globalPosition)?
+      onEndHandleDrag;
+  final VoidCallback? onHandleDragEnd;
 
   const _HighlightedParagraph({
     required this.text,
@@ -99,6 +128,9 @@ class _HighlightedParagraph extends StatelessWidget {
     this.onLongPressStart,
     this.onLongPressMoveUpdate,
     this.onLongPressEnd,
+    this.onStartHandleDrag,
+    this.onEndHandleDrag,
+    this.onHandleDragEnd,
   });
 
   @override
@@ -144,6 +176,20 @@ class _HighlightedParagraph extends StatelessWidget {
               return painter.getWordBoundary(pos);
             }
 
+            // Convertit une position ÉCRAN (d.globalPosition) en coordonnées
+            // du paragraphe, via son propre RenderBox — stable, contrairement
+            // à la position d'une poignée qui, elle, se déplace à chaque
+            // mise à jour de la sélection (voir _SelectionHandle : utiliser
+            // sa position locale à elle créait un effet d'emballement, le
+            // point de référence bougeant sous le doigt à chaque frame).
+            Offset globalToLocal(Offset global) {
+              final box = context.findRenderObject();
+              if (box is RenderBox && box.attached) {
+                return box.globalToLocal(global);
+              }
+              return global;
+            }
+
             Widget content = CustomPaint(
               size: paragraphSize,
               painter: (sentenceRange != null ||
@@ -165,21 +211,150 @@ class _HighlightedParagraph extends StatelessWidget {
               child: RichText(text: text, textAlign: TextAlign.justify),
             );
 
+            String textOf(TextRange r) {
+              final s = r.start.clamp(0, painter.plainText.length);
+              final e = r.end.clamp(0, painter.plainText.length);
+              return s < e ? painter.plainText.substring(s, e) : '';
+            }
+
             if (onLongPressStart != null) {
               content = GestureDetector(
-                onLongPressStart: (d) => onLongPressStart!(wordAt(d.localPosition)),
-                onLongPressMoveUpdate: (d) =>
-                    onLongPressMoveUpdate?.call(wordAt(d.localPosition)),
+                onLongPressStart: (d) {
+                  final word = wordAt(d.localPosition);
+                  onLongPressStart!(word, textOf(word), d.globalPosition);
+                },
+                onLongPressMoveUpdate: (d) {
+                  final word = wordAt(d.localPosition);
+                  onLongPressMoveUpdate?.call(word, textOf(word), d.globalPosition);
+                },
                 onLongPressEnd: (_) => onLongPressEnd?.call(),
                 child: content,
               );
             }
 
-            return content;
+            // Le Stack lui-même est TOUJOURS présent, que des poignées
+            // soient affichées ou non — seuls ses enfants EN PLUS du contenu
+            // principal varient. Le faire apparaître seulement une fois
+            // `selectionRange` non nul (comme avant) changeait l'ANCÊTRE du
+            // contenu principal exactement au moment du tout premier mot
+            // sélectionné, en plein geste — cassant le suivi (seul le
+            // premier mot restait sélectionné, un second essai fonctionnait
+            // toujours puisque le Stack était alors déjà en place dès le
+            // début). Même leçon que pour le ValueListenableBuilder de
+            // sélection plus haut, appliquée cette fois à ce Stack.
+            final handles = <Widget>[];
+            final sel = selectionRange;
+            if (sel != null && (onStartHandleDrag != null || onEndHandleDrag != null)) {
+              final s = sel.start.clamp(0, painter.plainText.length);
+              final e = sel.end.clamp(0, painter.plainText.length);
+              if (s < e) {
+                final boxes = painter.getBoxesForSelection(
+                  TextSelection(baseOffset: s, extentOffset: e),
+                );
+                if (boxes.isNotEmpty) {
+                  final startBox = boxes.first;
+                  final endBox = boxes.last;
+                  if (onStartHandleDrag != null) {
+                    handles.add(_SelectionHandle(
+                      position: Offset(startBox.left, (startBox.top + startBox.bottom) / 2),
+                      wordAt: wordAt,
+                      textOf: textOf,
+                      globalToLocal: globalToLocal,
+                      onDrag: onStartHandleDrag!,
+                      onDragEnd: onHandleDragEnd,
+                    ));
+                  }
+                  if (onEndHandleDrag != null) {
+                    handles.add(_SelectionHandle(
+                      position: Offset(endBox.right, (endBox.top + endBox.bottom) / 2),
+                      wordAt: wordAt,
+                      textOf: textOf,
+                      globalToLocal: globalToLocal,
+                      onDrag: onEndHandleDrag!,
+                      onDragEnd: onHandleDragEnd,
+                    ));
+                  }
+                }
+              }
+            }
+
+            return Stack(clipBehavior: Clip.none, children: [content, ...handles]);
           } catch (_) {
             return RichText(text: text, textAlign: TextAlign.justify);
           }
         },
+      ),
+    );
+  }
+}
+
+/// Poignée ronde avec une petite queue, ancrée sur le bord d'un mot de
+/// sélection (façon éditeurs de texte natifs) — se glisse pour ajuster le
+/// début ou la fin d'une sélection déjà posée.
+class _SelectionHandle extends StatelessWidget {
+  /// Point d'ancrage (milieu vertical du glyphe visé), en coordonnées du
+  /// paragraphe — pas de l'écran.
+  final Offset position;
+  final TextRange Function(Offset paragraphLocal) wordAt;
+  final String Function(TextRange word) textOf;
+  /// Convertit une position ÉCRAN en coordonnées du paragraphe — voir le
+  /// commentaire sur globalToLocal dans _HighlightedParagraph.build().
+  final Offset Function(Offset global) globalToLocal;
+  final void Function(TextRange word, String wordText, Offset globalPosition) onDrag;
+  final VoidCallback? onDragEnd;
+
+  static const double _visualRadius = 7;
+  static const double _hitRadius = 22;
+
+  const _SelectionHandle({
+    required this.position,
+    required this.wordAt,
+    required this.textOf,
+    required this.globalToLocal,
+    required this.onDrag,
+    this.onDragEnd,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = Theme.of(context).colorScheme.primary;
+    return Positioned(
+      left: position.dx - _hitRadius,
+      top: position.dy - _hitRadius,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onPanUpdate: (d) {
+          // d.globalPosition, PAS d.localPosition : cette poignée se déplace
+          // à chaque mise à jour de la sélection (elle suit le mot visé), donc
+          // une position relative à elle-même créerait un effet d'emballement
+          // — le point de référence bouge sous le doigt à chaque frame.
+          final paragraphLocal = globalToLocal(d.globalPosition);
+          final word = wordAt(paragraphLocal);
+          onDrag(word, textOf(word), d.globalPosition);
+        },
+        onPanEnd: (_) => onDragEnd?.call(),
+        child: SizedBox(
+          width: _hitRadius * 2,
+          height: _hitRadius * 2,
+          child: Align(
+            alignment: Alignment.topCenter,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  width: _visualRadius * 2,
+                  height: _visualRadius * 2,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: color,
+                    border: Border.all(color: Colors.white, width: 1.5),
+                  ),
+                ),
+                Container(width: 2, height: 10, color: color),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }
@@ -269,8 +444,19 @@ class ReaderScreen extends StatefulWidget {
   /// Si fourni, l'écran défile jusqu'à ce passage sauvegardé à l'ouverture
   /// (venant de l'onglet Annotations).
   final Annotation? jumpToAnnotation;
-  const ReaderScreen({Key? key, required this.ebook, this.jumpToAnnotation})
-      : super(key: key);
+  /// Alternative à jumpToAnnotation pour sauter à un passage identifié par
+  /// chapitre + paragraphe seulement (venant de l'onglet Traductions, qui
+  /// n'a pas d'offsets de caractères comme une Annotation) — voir
+  /// _findGlobalIndexForChapterParagraph.
+  final String? jumpToChapterId;
+  final int? jumpToParagraphIndexInChapter;
+  const ReaderScreen({
+    Key? key,
+    required this.ebook,
+    this.jumpToAnnotation,
+    this.jumpToChapterId,
+    this.jumpToParagraphIndexInChapter,
+  }) : super(key: key);
 
   @override
   State<ReaderScreen> createState() => _ReaderScreenState();
@@ -296,7 +482,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // Photo du texte aplati du paragraphe au moment du début de la sélection —
   // sert à extraire l'extrait sélectionné sans reconstruire tout le span.
   String? _selectionParagraphPlainText;
+  // Index de phrase mis en attente si la lecture avance pendant une
+  // sélection en cours — voir _onHandlerIndexChanged/_applyPendingIndexIfAny.
+  int? _pendingIndexAfterSelection;
   final ValueNotifier<TextRange?> _selectionRangeNotifier = ValueNotifier(null);
+  // Bulle flottante qui montre le mot sous le doigt pendant la sélection —
+  // voir _showSelectionBubble.
+  final ValueNotifier<_SelectionBubbleData?> _selectionBubbleNotifier = ValueNotifier(null);
+  OverlayEntry? _selectionBubbleEntry;
   late Box<Annotation> _annotationBox;
   // ebook.id -> chapterId -> paragraphIndexInChapter -> annotations, pour un
   // lookup bon marché depuis _buildParagraphWidget (appelé à chaque frame
@@ -334,6 +527,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _autoScrollEnabled = true;  // défilement automatique pendant la lecture
   bool _readerVisible = true;       // afficher/masquer le texte pendant la lecture
 
+  // ── Traduction en direct (bulle au-dessus du texte pendant la lecture) ──
+  // Volontairement NON persisté (comme _autoScrollEnabled) : se réactive à
+  // chaque ouverture du lecteur plutôt que de rester allumé silencieusement
+  // et de continuer à consommer le quota DeepL sans que l'utilisateur ne
+  // s'en rende compte.
+  bool _translationModeEnabled = false;
+  final TranslationService _translationService = TranslationService();
+  String? _currentTranslation;
+  // Empêche d'afficher la traduction d'une phrase déjà dépassée si la
+  // réponse DeepL d'un appel périmé arrive après celle d'un appel plus
+  // récent (l'utilisateur peut avancer plus vite que la latence réseau).
+  int _translationRequestId = 0;
+  // Position glissée par l'utilisateur (appui prolongé + déplacement sur la
+  // bulle) — null tant qu'il n'a pas encore bougé la bulle, auquel cas elle
+  // reste à sa position par défaut sous l'AppBar. Non persisté (comme
+  // _autoScrollEnabled) : repart de la position par défaut à chaque
+  // ouverture du livre plutôt que de se souvenir d'un emplacement qui
+  // pourrait ne plus convenir (taille de police différente, etc.).
+  Offset? _translationBubbleOffset;
+  // Position de la bulle au tout début du geste de déplacement en cours —
+  // voir _buildTranslationBubble pour pourquoi c'est nécessaire.
+  Offset? _dragStartBubbleOffset;
+
   List<Voice> availableVoices = [];
   String selectedVoice = "en-US-Neural2-C";
   String selectedLanguageCode = "en-US";
@@ -369,9 +585,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (saved > 0 && saved < _sentences.length) {
       _currentGlobalIndex = saved;
     }
-    // Un saut vers une annotation prime sur la position sauvegardée.
+    // Un saut vers une annotation ou une traduction prime sur la position
+    // sauvegardée.
     final jump = widget.jumpToAnnotation;
-    final jumpIndex = jump == null ? null : _findGlobalIndexForAnnotation(jump);
+    final jumpChapterId = widget.jumpToChapterId;
+    final jumpParagraphIndex = widget.jumpToParagraphIndexInChapter;
+    final int? jumpIndex;
+    if (jump != null) {
+      jumpIndex = _findGlobalIndexForChapterParagraph(jump.chapterId, jump.paragraphIndexInChapter);
+    } else if (jumpChapterId != null && jumpParagraphIndex != null) {
+      jumpIndex = _findGlobalIndexForChapterParagraph(jumpChapterId, jumpParagraphIndex);
+    } else {
+      jumpIndex = null;
+    }
     if (jumpIndex != null) {
       _currentGlobalIndex = jumpIndex;
     }
@@ -381,8 +607,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
     fontSizeNotifier.addListener(_onFontChanged);
     fontFamilyNotifier.addListener(_onFontChanged);
     if (jumpIndex != null) {
+      final targetIndex = jumpIndex;
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _scrollToSentence(jumpIndex, animate: false);
+        if (mounted) _scrollToSentence(targetIndex, animate: false);
       });
     }
   }
@@ -401,15 +628,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
     _savedHighlightsByChapter = map;
   }
 
-  /// Retrouve la première phrase du paragraphe visé par une annotation, pour
-  /// pouvoir y défiler — null si le livre a changé de structure entre-temps
-  /// (ré-import) et que le paragraphe n'existe plus tel quel.
-  int? _findGlobalIndexForAnnotation(Annotation a) {
+  /// Retrouve la première phrase du paragraphe visé (identifié par chapitre
+  /// + index de paragraphe — utilisé aussi bien par les annotations que les
+  /// traductions enregistrées), pour pouvoir y défiler — null si le livre a
+  /// changé de structure entre-temps (ré-import) et que le paragraphe
+  /// n'existe plus tel quel.
+  int? _findGlobalIndexForChapterParagraph(String chapterId, int paragraphIndexInChapter) {
     for (final item in _displayItems) {
       if (item is _ParagraphItem &&
           item.chapterIndex < widget.ebook.chapters.length &&
-          widget.ebook.chapters[item.chapterIndex].id == a.chapterId &&
-          item.paragraphIndexInChapter == a.paragraphIndexInChapter &&
+          widget.ebook.chapters[item.chapterIndex].id == chapterId &&
+          item.paragraphIndexInChapter == paragraphIndexInChapter &&
           item.sentenceIndices.isNotEmpty) {
         return item.sentenceIndices.first;
       }
@@ -419,28 +648,64 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   // ── Sélection tactile (surlignage) ────────────────────────────────────────
 
-  void _onSelectionStart(_ParagraphItem para, TextRange word, String plainText) {
+  void _onSelectionStart(_ParagraphItem para, TextRange word, String plainText,
+      String wordText, Offset globalPosition) {
     setState(() {
       _selectingParagraph = para;
       _selectionAnchorWord = word;
       _selectionParagraphPlainText = plainText;
     });
     _selectionRangeNotifier.value = word;
+    _showSelectionBubble(wordText, globalPosition);
   }
 
-  void _onSelectionUpdate(_ParagraphItem para, TextRange word) {
+  void _onSelectionUpdate(
+      _ParagraphItem para, TextRange word, String wordText, Offset globalPosition) {
     if (!identical(_selectingParagraph, para)) return;
     final anchor = _selectionAnchorWord;
     if (anchor == null) return;
     final start = anchor.start < word.start ? anchor.start : word.start;
     final end = anchor.end > word.end ? anchor.end : word.end;
     _selectionRangeNotifier.value = TextRange(start: start, end: end);
+    _showSelectionBubble(wordText, globalPosition);
   }
 
   void _onSelectionEnd(_ParagraphItem para) {
     // L'état (_selectingParagraph, _selectionRangeNotifier) est déjà à jour
     // à ce stade — la barre de confirmation les observe directement, rien à
-    // faire de plus ici.
+    // faire de plus ici. La bulle, elle, ne sert que pendant le glissement.
+    _hideSelectionBubble();
+  }
+
+  // ── Poignées d'ajustement (début/fin de la sélection déjà posée) ─────────
+  // Permettent de corriger une sélection après avoir relâché le doigt
+  // initial, sans devoir tout recommencer si le premier appui ciblait le
+  // mauvais mot.
+
+  void _onAdjustSelectionStart(
+      _ParagraphItem para, TextRange word, String wordText, Offset globalPosition) {
+    if (!identical(_selectingParagraph, para)) return;
+    final current = _selectionRangeNotifier.value;
+    if (current == null) return;
+    // Le nouveau début ne dépasse jamais la fin actuelle de la sélection.
+    final newStart = word.start < current.end ? word.start : current.end;
+    _selectionRangeNotifier.value = TextRange(start: newStart, end: current.end);
+    _showSelectionBubble(wordText, globalPosition);
+  }
+
+  void _onAdjustSelectionEnd(
+      _ParagraphItem para, TextRange word, String wordText, Offset globalPosition) {
+    if (!identical(_selectingParagraph, para)) return;
+    final current = _selectionRangeNotifier.value;
+    if (current == null) return;
+    // La nouvelle fin ne remonte jamais avant le début actuel de la sélection.
+    final newEnd = word.end > current.start ? word.end : current.start;
+    _selectionRangeNotifier.value = TextRange(start: current.start, end: newEnd);
+    _showSelectionBubble(wordText, globalPosition);
+  }
+
+  void _onHandleDragEnd() {
+    _hideSelectionBubble();
   }
 
   void _cancelSelection() {
@@ -450,6 +715,194 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _selectionParagraphPlainText = null;
     });
     _selectionRangeNotifier.value = null;
+    _hideSelectionBubble();
+    _applyPendingIndexIfAny();
+  }
+
+  // ── Bulle « mot sous le doigt » ───────────────────────────────────────────
+  // Le doigt masque exactement le mot qu'on essaie de viser pendant la
+  // sélection — cette bulle, positionnée au-dessus du point de contact,
+  // montre ce mot en clair pour compenser.
+
+  static const _magnifierSize = Size(180, 76);
+  static const _magnifierGapAboveFinger = 74.0;
+
+  void _ensureSelectionBubbleOverlay() {
+    if (_selectionBubbleEntry != null) return;
+    _selectionBubbleEntry = OverlayEntry(
+      builder: (context) => ValueListenableBuilder<_SelectionBubbleData?>(
+        valueListenable: _selectionBubbleNotifier,
+        builder: (context, data, _) {
+          if (data == null) return const SizedBox.shrink();
+          final screenSize = MediaQuery.of(context).size;
+
+          var left = data.position.dx - _magnifierSize.width / 2;
+          left = left.clamp(8.0, screenSize.width - _magnifierSize.width - 8);
+
+          var top = data.position.dy - _magnifierGapAboveFinger - _magnifierSize.height;
+          // Pas assez de place au-dessus (doigt proche du haut de l'écran) :
+          // affiche la loupe sous le doigt plutôt qu'au-dessus.
+          if (top < 40) {
+            top = data.position.dy + 40;
+          }
+
+          // RawMagnifier échantillonne au point (position propre + décalage) —
+          // la loupe étant décalée du doigt, il faut lui indiquer où viser.
+          final magnifierCenter = Offset(
+            left + _magnifierSize.width / 2,
+            top + _magnifierSize.height / 2,
+          );
+
+          return Positioned(
+            left: left,
+            top: top,
+            child: IgnorePointer(
+              child: RawMagnifier(
+                size: _magnifierSize,
+                magnificationScale: 2.0,
+                focalPointOffset: data.position - magnifierCenter,
+                decoration: MagnifierDecoration(
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                    side: const BorderSide(color: Colors.amber, width: 2),
+                  ),
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    );
+    Overlay.of(context).insert(_selectionBubbleEntry!);
+  }
+
+  void _showSelectionBubble(String text, Offset globalPosition) {
+    if (text.isEmpty) return;
+    _ensureSelectionBubbleOverlay();
+    _selectionBubbleNotifier.value = _SelectionBubbleData(text, globalPosition);
+  }
+
+  void _hideSelectionBubble() {
+    _selectionBubbleNotifier.value = null;
+  }
+
+  /// Texte actuellement sélectionné (mot OU phrase entière, sans limite de
+  /// longueur) pour le bouton "Traduire" — contrairement à "Définir",
+  /// traduire une phrase entière a un sens, donc pas de restriction au mot
+  /// unique ici. Même nettoyage que _saveSelectionAsAnnotation (retrait du
+  /// caractère objet U+FFFC des ancres de phrase invisibles, espaces
+  /// multiples).
+  String? _selectedTextOrNull() {
+    final range = _selectionRangeNotifier.value;
+    final plainText = _selectionParagraphPlainText;
+    if (range == null || plainText == null) return null;
+
+    final start = range.start.clamp(0, plainText.length);
+    final end = range.end.clamp(0, plainText.length);
+    if (start >= end) return null;
+
+    final text = plainText
+        .substring(start, end)
+        .replaceAll('￼', '')
+        .replaceAll(RegExp(r' {2,}'), ' ')
+        .trim();
+    return text.isEmpty ? null : text;
+  }
+
+  /// Retourne le mot actuellement sélectionné si la sélection ne contient
+  /// qu'UN seul mot, sinon null — le bouton "Définir" n'a de sens que dans
+  /// ce cas (chercher une définition pour plusieurs mots à la fois n'aurait
+  /// pas de réponse cohérente).
+  ///
+  /// Réutilise EXACTEMENT le même nettoyage que _saveSelectionAsAnnotation
+  /// (retrait du caractère objet U+FFFC des ancres de phrase invisibles,
+  /// espaces multiples) : sans ce retrait, un mot situé juste après une
+  /// ancre de début de phrase contiendrait un caractère invisible qui le
+  /// ferait compter comme "deux mots" et le bouton n'apparaîtrait jamais.
+  String? _singleSelectedWordOrNull() {
+    final range = _selectionRangeNotifier.value;
+    final plainText = _selectionParagraphPlainText;
+    if (range == null || plainText == null) return null;
+
+    final start = range.start.clamp(0, plainText.length);
+    final end = range.end.clamp(0, plainText.length);
+    if (start >= end) return null;
+
+    var word = plainText
+        .substring(start, end)
+        .replaceAll('￼', '')
+        .replaceAll(RegExp(r' {2,}'), ' ')
+        .trim();
+
+    // Ponctuation de BORD uniquement (« subtle, » → « subtle ») — on garde
+    // les apostrophes et traits d'union internes pour ne pas casser "don't"
+    // ou "well-known".
+    word = word.replaceAll(RegExp(r'^[^\p{L}]+|[^\p{L}]+$', unicode: true), '');
+
+    if (word.isEmpty || word.length > 40) return null;
+    if (RegExp(r'\s').hasMatch(word)) return null; // deux mots ou plus
+    return word;
+  }
+
+  /// Ouvre la fiche dictionnaire pour [word]. Annule d'abord la sélection en
+  /// cours : tant qu'une sélection vit, l'avancement de la lecture reste en
+  /// attente (voir _pendingIndexAfterSelection / _onHandlerIndexChanged) —
+  /// la laisser active derrière une feuille modale ouverte plusieurs
+  /// secondes gèlerait le défilement automatique pendant tout ce temps.
+  Future<void> _openDictionaryForWord(String word) async {
+    final para = _selectingParagraph;
+    final chapterId =
+        para == null ? '' : widget.ebook.chapters[para.chapterIndex].id;
+    _cancelSelection();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true, // nécessaire pour dépasser 50% de hauteur
+      useSafeArea: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => FractionallySizedBox(
+        heightFactor: 0.75,
+        child: DictionarySheet(
+          word: word,
+          sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
+          ebookId: widget.ebook.id,
+          chapterId: chapterId,
+        ),
+      ),
+    );
+  }
+
+  /// Ouvre la fiche de traduction pour [text] (mot ou phrase entière) — même
+  /// logique que _openDictionaryForWord (annule la sélection d'abord pour ne
+  /// pas geler le défilement automatique derrière la feuille modale).
+  Future<void> _openTranslationForText(String text) async {
+    final para = _selectingParagraph;
+    final chapterId =
+        para == null ? '' : widget.ebook.chapters[para.chapterIndex].id;
+    _cancelSelection();
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      backgroundColor: Theme.of(context).colorScheme.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (_) => FractionallySizedBox(
+        heightFactor: 0.6,
+        child: TranslationSheet(
+          text: text,
+          sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
+          ebookId: widget.ebook.id,
+          chapterId: chapterId,
+          paragraphIndexInChapter: para?.paragraphIndexInChapter ?? -1,
+        ),
+      ),
+    );
   }
 
   Future<void> _saveSelectionAsAnnotation() async {
@@ -467,10 +920,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _cancelSelection();
       return;
     }
-    // Le caractère objet des ancres invisibles (voir _buildParagraphWidget)
-    // peut se retrouver en bord de sélection — trim() l'élimine avec le
-    // reste des espaces superflus.
-    final selectedText = plainText.substring(start, end).trim();
+    // Le caractère objet (U+FFFC) des ancres invisibles (voir
+    // _buildParagraphWidget) peut se retrouver n'importe où dans la
+    // sélection, pas seulement en bord — une sélection sur plusieurs
+    // phrases du même paragraphe traverse une ancre en plein milieu. Sans
+    // ce retrait, ce caractère s'affiche comme un petit carré "obj" dans
+    // le texte sauvegardé.
+    final selectedText = plainText
+        .substring(start, end)
+        .replaceAll('￼', '')
+        .replaceAll(RegExp(r' {2,}'), ' ')
+        .trim();
     if (selectedText.isEmpty) {
       _cancelSelection();
       return;
@@ -500,12 +960,80 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _selectionParagraphPlainText = null;
     });
     _selectionRangeNotifier.value = null;
+    _applyPendingIndexIfAny();
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Passage surligné')),
+  /// Bulle de traduction en direct. Position par défaut FIXE juste sous
+  /// l'AppBar plutôt que de suivre pixel par pixel la position réelle de la
+  /// phrase en cours à l'écran — le défilement automatique la maintient de
+  /// toute façon déjà autour du même tiers supérieur de l'écran (voir
+  /// _scrollAnchorFraction), donc une position par défaut fixe reste
+  /// visuellement juste "au-dessus du texte lu" sans réintroduire de calcul
+  /// de position dépendant du scroll, une source récurrente de bugs sur cet
+  /// écran. L'utilisateur peut néanmoins la faire glisser (appui prolongé +
+  /// déplacement) à l'endroit de son choix — voir _translationBubbleOffset.
+  Widget _buildTranslationBubble(BuildContext context) {
+    final translation = _currentTranslation;
+    if (translation == null) return const SizedBox.shrink();
+
+    final screenSize = MediaQuery.sizeOf(context);
+    // Largeur FIXE (plutôt que left/right qui étirent jusqu'aux bords) dès
+    // qu'on connaît une position glissée : sans ça, la bulle collerait
+    // toujours au bord droit de l'écran une fois posée près du bord gauche.
+    const bubbleWidth = 280.0;
+    final offset = _translationBubbleOffset ??
+        Offset((screenSize.width - bubbleWidth) / 2, 8);
+    // Bornes larges plutôt qu'une mesure exacte de la hauteur de la bulle
+    // (variable selon la longueur du texte traduit) : suffisant pour
+    // l'empêcher de sortir complètement de l'écran, pas besoin de plus de
+    // précision pour ce geste de confort.
+    final clampedLeft = offset.dx.clamp(0.0, (screenSize.width - bubbleWidth).clamp(0.0, double.infinity));
+    final clampedTop = offset.dy.clamp(0.0, screenSize.height - 120);
+
+    return Positioned(
+      left: clampedLeft,
+      top: clampedTop,
+      width: bubbleWidth,
+      child: GestureDetector(
+        // offsetFromOrigin est mesuré depuis le POINT DE DÉPART de l'appui
+        // prolongé, pas depuis la dernière position — il faut donc partir
+        // d'une position de référence fixée une fois au début du geste
+        // (_dragStartBubbleOffset), sinon le déplacement s'additionne à
+        // chaque frame et la bulle s'envole beaucoup plus vite que le doigt.
+        onLongPressStart: (_) => _dragStartBubbleOffset = Offset(clampedLeft, clampedTop),
+        onLongPressMoveUpdate: (details) {
+          final start = _dragStartBubbleOffset;
+          if (start == null) return;
+          setState(() {
+            _translationBubbleOffset = start + details.offsetFromOrigin;
+          });
+        },
+        child: Material(
+          color: Theme.of(context).colorScheme.primaryContainer,
+          elevation: 4,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+            child: Text(
+              translation,
+              style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
+            ),
+          ),
+        ),
+      ),
     );
   }
 
+  /// Bulle flottante Annuler/Surligner, positionnée dans le même `Stack` que
+  /// le texte plutôt que comme enfant du `Column` du corps de l'écran — pour
+  /// ne jamais faire varier la hauteur de la zone de lecture. La faire
+  /// apparaître comme un enfant de Column (comme avant) rétrécissait la
+  /// zone défilable pile au moment où la sélection démarre, décalant le
+  /// texte sous le doigt au tout premier appui : la loupe visait alors une
+  /// géométrie déjà périmée. Un deuxième appui n'était jamais affecté
+  /// puisque la bulle était déjà affichée avant que le geste ne commence.
+  /// Pas d'aperçu du texte sélectionné ici non plus, pour la même raison :
+  /// un texte de longueur variable changerait la taille de cette bulle.
   Widget _buildSelectionBar() {
     return ValueListenableBuilder<TextRange?>(
       valueListenable: _selectionRangeNotifier,
@@ -513,38 +1041,76 @@ class _ReaderScreenState extends State<ReaderScreen> {
         if (_selectingParagraph == null || range == null) {
           return const SizedBox.shrink();
         }
-        final plainText = _selectionParagraphPlainText ?? '';
-        final start = range.start.clamp(0, plainText.length);
-        final end = range.end.clamp(0, plainText.length);
-        final preview = start < end ? plainText.substring(start, end).trim() : '';
-        return Container(
-          width: double.infinity,
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-          decoration: BoxDecoration(
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            border: Border(top: BorderSide(color: Colors.grey[300]!)),
-          ),
-          child: Row(
-            children: [
-              Expanded(
-                child: Text(
-                  preview.isEmpty ? '…' : '« $preview »',
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
-                  style: Theme.of(context).textTheme.bodyMedium,
+        // Le bouton « Retour au texte en cours » occupe déjà la même zone
+        // en bas de l'écran (bottom: 12, centré) — s'il est visible en même
+        // temps qu'une sélection, la bulle Annuler/Surligner se place plus
+        // haut pour ne jamais le chevaucher, plutôt que de tomber pile
+        // dessus (elle serait techniquement dessus au tri en Z, mais toutes
+        // deux resteraient visibles seulement partiellement).
+        final singleWord = _singleSelectedWordOrNull();
+        final selectedText = _selectedTextOrNull();
+        return Positioned(
+          bottom: _showReturnButton ? 76 : 20,
+          left: 0,
+          right: 0,
+          child: Center(
+            child: Material(
+              color: Theme.of(context).colorScheme.surfaceContainerHighest,
+              elevation: 6,
+              borderRadius: BorderRadius.circular(24),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                // Largeur bornée : avec 3 boutons possibles (Annuler /
+                // Définir / Surligner), un petit écran pourrait sinon
+                // déborder horizontalement. La hauteur, elle, reste fixe
+                // quel que soit le nombre de boutons visibles — voir le
+                // commentaire de la fonction : c'est ça qui compte pour ne
+                // jamais décaler la zone de lecture.
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: MediaQuery.sizeOf(context).width - 32,
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextButton(
+                        onPressed: _cancelSelection,
+                        child: const Text('Annuler'),
+                      ),
+                      const SizedBox(width: 4),
+                      if (singleWord != null) ...[
+                        TextButton.icon(
+                          onPressed: () => _openDictionaryForWord(singleWord),
+                          icon: const Icon(Icons.menu_book_rounded, size: 18),
+                          // Libellé FIXE (jamais le mot sélectionné) : un
+                          // texte de longueur variable changerait la taille
+                          // de cette bulle — voir le commentaire de la
+                          // fonction, c'est l'interdiction documentée qui a
+                          // motivé le fait que la bulle n'affiche déjà pas
+                          // d'aperçu du texte sélectionné.
+                          label: const Text('Définir'),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      if (selectedText != null) ...[
+                        TextButton.icon(
+                          onPressed: () => _openTranslationForText(selectedText),
+                          icon: const Icon(Icons.g_translate_rounded, size: 18),
+                          // Libellé FIXE, même raison que "Définir" ci-dessus.
+                          label: const Text('Traduire'),
+                        ),
+                        const SizedBox(width: 4),
+                      ],
+                      FilledButton.icon(
+                        onPressed: _saveSelectionAsAnnotation,
+                        icon: const Icon(Icons.border_color_rounded, size: 18),
+                        label: const Text('Surligner'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-              TextButton(
-                onPressed: _cancelSelection,
-                child: const Text('Annuler'),
-              ),
-              const SizedBox(width: 4),
-              FilledButton.icon(
-                onPressed: _saveSelectionAsAnnotation,
-                icon: const Icon(Icons.border_color_rounded, size: 18),
-                label: const Text('Surligner'),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -615,11 +1181,223 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _onHandlerIndexChanged() {
     final idx = audioHandler?.currentIndexNotifier.value ?? 0;
     if (!mounted) return;
+
+    // Pendant une sélection tactile en cours, on gèle l'indicateur de
+    // lecture entièrement (pas seulement le gras) : chaque changement de
+    // phrase reconstruit tous les paragraphes visibles via ce setState, y
+    // compris celui qu'on est en train de sélectionner. Après quelques
+    // reconstructions d'affilée (constaté : ~3 phrases), le geste de
+    // glissement finissait par se figer — trop de reconstructions
+    // successives de son propre GestureDetector, même sans changement de
+    // mise en page. On mémorise juste l'index visé, rattrapé d'un coup à
+    // la fin du geste : le surlignage doit rester fiable en toutes
+    // circonstances, quitte à perdre le suivi visuel en direct ailleurs
+    // pendant les quelques secondes d'une sélection.
+    if (_selectingParagraph != null) {
+      _pendingIndexAfterSelection = idx;
+      return;
+    }
+
     setState(() => _currentGlobalIndex = idx);
     _saveProgress();
     if (_autoScrollEnabled && !_showReturnButton) {
       _autoScrollToCurrentSentence(idx);
     }
+    if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+  }
+
+  /// Rattrape en un coup le changement de phrase en cours qui a été gelé
+  /// pendant une sélection tactile (voir _onHandlerIndexChanged).
+  void _applyPendingIndexIfAny() {
+    final pending = _pendingIndexAfterSelection;
+    if (pending == null) return;
+    _pendingIndexAfterSelection = null;
+    setState(() => _currentGlobalIndex = pending);
+    _saveProgress();
+    if (_autoScrollEnabled && !_showReturnButton) {
+      _autoScrollToCurrentSentence(pending);
+    }
+    if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+  }
+
+  /// Traduit la phrase actuellement lue et met à jour la bulle en haut de
+  /// l'écran (voir _translationModeEnabled). Aucune erreur affichée en cas
+  /// d'échec réseau/quota : contrairement à une recherche de dictionnaire
+  /// (geste volontaire de l'utilisateur), c'est une fonctionnalité ambiante
+  /// qui se déclenche à chaque phrase — un message d'erreur toutes les
+  /// quelques secondes serait bien plus gênant qu'une bulle qui manque une
+  /// mise à jour de temps en temps.
+  Future<void> _loadTranslationForCurrentSentence() async {
+    final index = _currentGlobalIndex;
+    if (index < 0 || index >= _sentences.length) return;
+    final requestId = ++_translationRequestId;
+    try {
+      final translated = await _translationService.translate(
+        text: _sentences[index].text,
+        sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
+        targetLang: translationLanguageNotifier.value,
+      );
+      if (!mounted || requestId != _translationRequestId) return;
+      setState(() => _currentTranslation = translated);
+    } catch (_) {
+      // Bulle laissée telle quelle (garde la dernière traduction valide)
+      // plutôt que d'afficher une erreur pour une seule phrase manquée.
+    }
+  }
+
+  void _setTranslationModeEnabled(bool enabled) {
+    setState(() {
+      _translationModeEnabled = enabled;
+      if (!_translationModeEnabled) _currentTranslation = null;
+    });
+    if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+  }
+
+  /// Panneau ouvert en tapant sur l'icône de dictionnaire de l'AppBar : ne
+  /// gère QUE la langue des définitions (voir DictionarySheet) — pas
+  /// d'interrupteur marche/arrêt ici, le dictionnaire n'a pas de "mode", il
+  /// se déclenche ponctuellement via le bouton "Définir" de la sélection.
+  /// Réglage volontairement séparé de la langue de traduction en direct
+  /// (translationLanguageNotifier) : rien n'oblige à vouloir les deux dans
+  /// la même langue.
+  void _showDictionaryLanguagePanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) {
+        final bottomPad = MediaQuery.of(context).padding.bottom + 24;
+        return Padding(
+          padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Center(
+                child: Container(
+                  width: 40, height: 4,
+                  margin: const EdgeInsets.only(bottom: 20),
+                  decoration: BoxDecoration(
+                    color: Colors.grey.shade400,
+                    borderRadius: BorderRadius.circular(2),
+                  ),
+                ),
+              ),
+              Text('Dictionnaire',
+                  style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                      fontWeight: FontWeight.bold)),
+              const SizedBox(height: 8),
+              ValueListenableBuilder<String>(
+                valueListenable: dictionaryLanguageNotifier,
+                builder: (context, lang, _) => ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: const Icon(Icons.language_rounded),
+                  title: const Text('Langue des définitions'),
+                  trailing: DropdownButton<String>(
+                    value: lang,
+                    underline: const SizedBox(),
+                    items: const [
+                      DropdownMenuItem(value: 'fr', child: Text('Français')),
+                      DropdownMenuItem(value: 'en', child: Text('English')),
+                      DropdownMenuItem(value: 'pt', child: Text('Português')),
+                      DropdownMenuItem(value: 'es', child: Text('Español')),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      dictionaryLanguageNotifier.value = value;
+                      Hive.box('settings').put('dictionaryLanguage', value);
+                    },
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// Panneau ouvert en tapant sur l'icône de traduction de l'AppBar :
+  /// interrupteur marche/arrêt ET choix de la langue au même endroit,
+  /// plutôt qu'un simple bouton bascule qui obligerait à aller dans Profil
+  /// pour changer de langue. Même structure que _showAppearancePanel
+  /// (StatefulBuilder + showModalBottomSheet) pour rester cohérent avec le
+  /// reste du lecteur.
+  void _showTranslationPanel() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setModalState) {
+          final bottomPad = MediaQuery.of(context).padding.bottom + 24;
+          return Padding(
+            padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Center(
+                  child: Container(
+                    width: 40, height: 4,
+                    margin: const EdgeInsets.only(bottom: 20),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade400,
+                      borderRadius: BorderRadius.circular(2),
+                    ),
+                  ),
+                ),
+                Text('Traduction en direct',
+                    style: Theme.of(context).textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold)),
+                const SizedBox(height: 8),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Activée'),
+                  subtitle: const Text('Bulle de traduction pendant la lecture'),
+                  value: _translationModeEnabled,
+                  onChanged: (value) {
+                    _setTranslationModeEnabled(value);
+                    setModalState(() {});
+                  },
+                ),
+                ValueListenableBuilder<String>(
+                  valueListenable: translationLanguageNotifier,
+                  builder: (context, lang, _) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.language_rounded),
+                    title: const Text('Langue de traduction'),
+                    trailing: DropdownButton<String>(
+                      value: lang,
+                      underline: const SizedBox(),
+                      items: const [
+                        DropdownMenuItem(value: 'fr', child: Text('Français')),
+                        DropdownMenuItem(value: 'en', child: Text('English')),
+                        DropdownMenuItem(value: 'pt', child: Text('Português')),
+                        DropdownMenuItem(value: 'es', child: Text('Español')),
+                      ],
+                      onChanged: (value) {
+                        if (value == null) return;
+                        translationLanguageNotifier.value = value;
+                        Hive.box('settings').put('translationLanguage', value);
+                        // Redemande la traduction de la phrase courante tout
+                        // de suite dans la nouvelle langue, plutôt que
+                        // d'attendre le prochain changement de phrase.
+                        if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+                      },
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        },
+      ),
+    );
   }
 
   /// Défilement automatique pendant la lecture. Contrairement à
@@ -763,7 +1541,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
               spans.add(TextSpan(
                 text: s.text,
                 recognizer: tap,
-                style: isCurrent ? TextStyle(fontWeight: FontWeight.w600, color: baseColor) : null,
+                // Le gras est désactivé pendant toute sélection tactile en
+                // cours (n'importe où sur la page) : c'est la seule chose
+                // que change `isCurrent` qui affecte la largeur du texte —
+                // et donc la seule chose capable de reformer la mise en
+                // page sous le doigt. Le surlignage (peint par-dessus, pas
+                // dans le texte) n'a lui aucun impact sur la mise en page,
+                // donc pas besoin de le geler : le suivi de lecture peut
+                // continuer en temps réel partout pendant qu'on sélectionne.
+                style: (isCurrent && _selectingParagraph == null)
+                    ? TextStyle(fontWeight: FontWeight.w600, color: baseColor)
+                    : null,
               ));
               if (isCurrent) {
                 sentenceStart = cursor;
@@ -807,10 +1595,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 selectionColor: Colors.amber.withOpacity(0.45),
                 savedHighlights: savedRanges,
                 savedHighlightColor: Colors.amber.withOpacity(0.28),
-                onLongPressStart: (word) =>
-                    _onSelectionStart(para, word, fullSpan.toPlainText()),
-                onLongPressMoveUpdate: (word) => _onSelectionUpdate(para, word),
+                onLongPressStart: (word, wordText, globalPos) => _onSelectionStart(
+                    para, word, fullSpan.toPlainText(), wordText, globalPos),
+                onLongPressMoveUpdate: (word, wordText, globalPos) =>
+                    _onSelectionUpdate(para, word, wordText, globalPos),
                 onLongPressEnd: () => _onSelectionEnd(para),
+                onStartHandleDrag: (word, wordText, globalPos) =>
+                    _onAdjustSelectionStart(para, word, wordText, globalPos),
+                onEndHandleDrag: (word, wordText, globalPos) =>
+                    _onAdjustSelectionEnd(para, word, wordText, globalPos),
+                onHandleDragEnd: _onHandleDragEnd,
               );
             }
 
@@ -818,23 +1612,47 @@ class _ReaderScreenState extends State<ReaderScreen> {
               // Seul le paragraphe contenant la phrase en cours a besoin de se
               // reconstruire à chaque changement de mot (~25ms) — les autres
               // restent statiques, pour ne pas ralentir tout le reste de la page.
+              //
+              // Toujours envelopper dans ce ValueListenableBuilder quand
+              // `containsCurrent` est vrai, même pendant une sélection — la
+              // forme de l'arbre ne doit jamais changer selon l'état de
+              // sélection (même raisonnement que pour le ValueListenableBuilder
+              // de sélection plus bas) : si ce paragraphe est AUSSI celui
+              // qu'on sélectionne, faire apparaître/disparaître cette couche
+              // casserait son GestureDetector en plein geste.
               if (!containsCurrent || wordNotifier == null) {
                 return buildParagraph(-1, selection);
               }
               return ValueListenableBuilder<int>(
                 valueListenable: wordNotifier,
-                builder: (context, wordIdx, _) => buildParagraph(wordIdx, selection),
+                builder: (context, wordIdx, _) {
+                  // Le minuteur mot par mot continue de tourner pendant une
+                  // sélection, mais suit la VRAIE phrase en cours de lecture
+                  // (potentiellement déjà avancée ailleurs, voir
+                  // _onHandlerIndexChanged) — l'appliquer quand même à cette
+                  // phrase gelée donnait l'impression qu'il bouclait sans fin
+                  // dessus. On l'ignore simplement pendant la sélection ; il
+                  // rattrape la bonne phrase dès qu'elle se termine.
+                  final effectiveWordIdx = _selectingParagraph == null ? wordIdx : -1;
+                  return buildParagraph(effectiveWordIdx, selection);
+                },
               );
             }
 
-            // Seul le paragraphe en cours de sélection a besoin d'écouter le
-            // notifier de sélection (partagé par tous les paragraphes) — les
-            // autres passent directement `null`, sans s'abonner, pour ne pas
-            // se reconstruire à chaque déplacement du doigt ailleurs.
-            if (!isSelectingThis) return withWordTracking(null);
+            // Toujours envelopper dans le ValueListenableBuilder, que ce
+            // paragraphe soit celui en cours de sélection ou non — la forme
+            // de l'arbre de widgets doit rester IDENTIQUE d'une frame à
+            // l'autre. La brancher seulement pour `isSelectingThis` (comme
+            // avant) faisait apparaître/disparaître cette couche exactement
+            // au moment où l'appui long démarre, ce qui recréait le
+            // GestureDetector en plein milieu du geste et le cassait : seul
+            // le premier mot restait sélectionné, glisser n'étendait plus
+            // rien tant qu'on ne réessayait pas une seconde fois (où la
+            // couche était déjà en place dès le départ).
             return ValueListenableBuilder<TextRange?>(
               valueListenable: _selectionRangeNotifier,
-              builder: (context, selection, _) => withWordTracking(selection),
+              builder: (context, selection, _) =>
+                  withWordTracking(isSelectingThis ? selection : null),
             );
           },
         ),
@@ -1563,7 +2381,41 @@ class _ReaderScreenState extends State<ReaderScreen> {
     for (final sentence in rawSentences) {
       result.addAll(_splitLongChunk(sentence, maxChunkLength));
     }
-    return result;
+    return _mergeContentlessFragments(result);
+  }
+
+  /// Recolle au fragment voisin toute "phrase" sans la moindre lettre ni
+  /// chiffre (ex: un tiret cadratin isolé, laissé par une extraction PDF
+  /// bancale — vu sur un livre où « —John Miller, CEO... » se retrouvait
+  /// coupé en un fragment "—" tout seul). Un texte purement ponctuation
+  /// envoyé seul à l'API Google TTS fait échouer les voix Neural2 avec une
+  /// erreur "Invalid SSML" — et comme la lecture ne peut pas avancer tant
+  /// que la phrase courante n'a pas fini de se synthétiser, ça bloquait la
+  /// lecture indéfiniment sur ce fragment (l'app retentait la même phrase
+  /// en boucle sans jamais progresser).
+  List<String> _mergeContentlessFragments(List<String> sentences) {
+    final hasContent = RegExp(r'[\p{L}\p{N}]', unicode: true);
+    final merged = <String>[];
+    var pendingPrefix = '';
+    for (final s in sentences) {
+      if (!hasContent.hasMatch(s)) {
+        pendingPrefix = pendingPrefix.isEmpty ? s : '$pendingPrefix $s';
+        continue;
+      }
+      merged.add(pendingPrefix.isEmpty ? s : '$pendingPrefix $s');
+      pendingPrefix = '';
+    }
+    if (pendingPrefix.isNotEmpty) {
+      if (merged.isNotEmpty) {
+        merged[merged.length - 1] = '${merged.last} $pendingPrefix';
+      } else {
+        // Tout le paragraphe ne contient aucune lettre ni chiffre (cas
+        // extrême) — on le garde tel quel plutôt que de le faire
+        // disparaître silencieusement du texte affiché.
+        merged.add(pendingPrefix);
+      }
+    }
+    return merged;
   }
 
   /// Redécoupe un morceau de texte trop long sur une ponctuation "douce"
@@ -2080,6 +2932,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
         elevation: 0,
         actions: [
           IconButton(
+            icon: const Icon(Icons.menu_book_rounded),
+            tooltip: 'Langue du dictionnaire',
+            onPressed: _showDictionaryLanguagePanel,
+          ),
+          IconButton(
+            icon: Icon(
+              Icons.translate_rounded,
+              color: _translationModeEnabled ? Theme.of(context).colorScheme.primary : null,
+            ),
+            tooltip: 'Traduction en direct',
+            onPressed: _showTranslationPanel,
+          ),
+          IconButton(
             icon: const Icon(Icons.format_size_rounded),
             tooltip: 'Apparence',
             onPressed: _showAppearancePanel,
@@ -2099,6 +2964,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   setState(() => _readerVisible = !_readerVisible);
                 case 'autoscroll':
                   setState(() => _autoScrollEnabled = !_autoScrollEnabled);
+                case 'annotations':
+                  Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => AnnotationsScreen(filterEbookId: widget.ebook.id),
+                    ),
+                  );
               }
             },
             itemBuilder: (context) => [
@@ -2107,6 +2979,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 child: ListTile(
                   leading: Icon(Icons.list_alt_rounded),
                   title: Text('Table des matières'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'annotations',
+                child: ListTile(
+                  leading: Icon(Icons.border_color_rounded),
+                  title: Text('Annotations de ce livre'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -2234,6 +3114,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
 
+                // ── Bulle de traduction en direct ─────────────────────────
+                if (_translationModeEnabled) _buildTranslationBubble(context),
+
                 // ── Bouton "Retour au texte en cours" ─────────────────────
                 if (_showReturnButton)
                   Positioned(
@@ -2284,12 +3167,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ),
                     ),
                   ),
+                // ── Barre de confirmation de sélection ───────────────────
+                // Dans le même Stack que le texte (pas le Column parent) :
+                // voir le commentaire sur _buildSelectionBar.
+                _buildSelectionBar(),
               ],
             ),
           ),
-
-          // ── Barre de confirmation de sélection ───────────────────────────
-          _buildSelectionBar(),
 
           // ── Contrôles fixes en bas ───────────────────────────────────────
           if (_readerVisible) Container(
@@ -2481,6 +3365,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
     fontFamilyNotifier.removeListener(_onFontChanged);
     _playerStateSub?.cancel();
     _selectionRangeNotifier.dispose();
+    _selectionBubbleEntry?.remove();
+    _selectionBubbleNotifier.dispose();
     // On ne reset plus jamais ici, même en pause — sinon la session (et donc
     // le mini-lecteur affiché sur les autres onglets) disparaît dès qu'on
     // quitte le livre sans être en train de lire. La session est de toute

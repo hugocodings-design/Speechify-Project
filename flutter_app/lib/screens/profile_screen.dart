@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
-import '../main.dart' show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier;
+import '../main.dart'
+    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
+        translationLanguageNotifier;
 import '../services/stats_service.dart';
 import '../widgets/section_header.dart';
 
@@ -57,6 +59,16 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _setFontFamily(String? family) {
     fontFamilyNotifier.value = family;
     Hive.box('settings').put('fontFamily', family);
+  }
+
+  void _setDictionaryLanguage(String code) {
+    dictionaryLanguageNotifier.value = code;
+    Hive.box('settings').put('dictionaryLanguage', code);
+  }
+
+  void _setTranslationLanguage(String code) {
+    translationLanguageNotifier.value = code;
+    Hive.box('settings').put('translationLanguage', code);
   }
 
   DateTimeRange _getRange() {
@@ -299,6 +311,50 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 DropdownMenuItem(value: 'monospace', child: Text('Monospace')),
               ],
               onChanged: _setFontFamily,
+            ),
+          ),
+        ),
+
+        ValueListenableBuilder<String>(
+          valueListenable: dictionaryLanguageNotifier,
+          builder: (context, dictionaryLanguage, _) => ListTile(
+            leading: const Icon(Icons.menu_book_rounded),
+            title: const Text('Langue du dictionnaire'),
+            subtitle: const Text('Langue des définitions pendant la lecture'),
+            trailing: DropdownButton<String>(
+              value: dictionaryLanguage,
+              underline: const SizedBox(),
+              items: const [
+                DropdownMenuItem(value: 'fr', child: Text('Français')),
+                DropdownMenuItem(value: 'en', child: Text('English')),
+                DropdownMenuItem(value: 'pt', child: Text('Português')),
+                DropdownMenuItem(value: 'es', child: Text('Español')),
+              ],
+              onChanged: (value) {
+                if (value != null) _setDictionaryLanguage(value);
+              },
+            ),
+          ),
+        ),
+
+        ValueListenableBuilder<String>(
+          valueListenable: translationLanguageNotifier,
+          builder: (context, translationLanguage, _) => ListTile(
+            leading: const Icon(Icons.translate_rounded),
+            title: const Text('Langue de traduction'),
+            subtitle: const Text('Traduction en direct et manuelle pendant la lecture'),
+            trailing: DropdownButton<String>(
+              value: translationLanguage,
+              underline: const SizedBox(),
+              items: const [
+                DropdownMenuItem(value: 'fr', child: Text('Français')),
+                DropdownMenuItem(value: 'en', child: Text('English')),
+                DropdownMenuItem(value: 'pt', child: Text('Português')),
+                DropdownMenuItem(value: 'es', child: Text('Español')),
+              ],
+              onChanged: (value) {
+                if (value != null) _setTranslationLanguage(value);
+              },
             ),
           ),
         ),
