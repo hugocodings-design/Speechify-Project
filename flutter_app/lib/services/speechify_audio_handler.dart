@@ -76,6 +76,26 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
   final Map<int, List<WordTiming>> _prefetchWordCache = {};
   int _voiceGeneration = 0;
 
+  /// Cache des dernières phrases déjà LUES, indexé par numéro de phrase.
+  /// Contrairement à _prefetchCache (qui ne regarde qu'en avant, et se vide
+  /// dès qu'une phrase est consommée), celui-ci se remplit à chaque lecture
+  /// réussie quelle que soit la direction — c'est ce qui permet au bouton
+  /// "précédent" d'être aussi instantané que "suivant" au lieu de resynthétiser
+  /// la phrase via un appel réseau à chaque retour en arrière.
+  final Map<int, String> _recentPlayedCache = {};
+  final Map<int, List<WordTiming>> _recentPlayedWordCache = {};
+  static const int _recentPlayedCacheCap = 5;
+
+  void _rememberPlayed(int index, String path, List<WordTiming> words) {
+    _recentPlayedCache[index] = path;
+    _recentPlayedWordCache[index] = words;
+    if (_recentPlayedCache.length > _recentPlayedCacheCap) {
+      final oldest = _recentPlayedCache.keys.first;
+      _recentPlayedCache.remove(oldest);
+      _recentPlayedWordCache.remove(oldest);
+    }
+  }
+
   // ── Notifiers pour l'UI ───────────────────────────────────────────────────
 
   /// Index de la phrase en cours — l'UI écoute ça pour le scroll et le surlignage
@@ -215,6 +235,8 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     _prefetchedWords = null;
     _prefetchCache.clear();
     _prefetchWordCache.clear();
+    _recentPlayedCache.clear();
+    _recentPlayedWordCache.clear();
     _bufferLoadedIndex = null;
     _resetWordTracking();
 
@@ -239,6 +261,8 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     _prefetchedWords = null;
     _prefetchCache.clear();
     _prefetchWordCache.clear();
+    _recentPlayedCache.clear();
+    _recentPlayedWordCache.clear();
     _bufferLoadedIndex = null;
   }
 
@@ -389,6 +413,9 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
         _currentPlayer.stop();
         _swapPlayers();
         _currentWordTimings = _prefetchedWords ?? [];
+        if (_prefetchedPath != null) {
+          _rememberPlayed(index, _prefetchedPath!, _currentWordTimings);
+        }
         _prefetchedWords = null;
         debugPrint('[WORD-TRACK] phrase $index (buffer) : ${_currentWordTimings.length} mots');
 
@@ -426,6 +453,11 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
         // réseau redondant quand cette phrase a déjà été pré-synthétisée
         audioPath = _prefetchCache.remove(index)!;
         words = _prefetchWordCache.remove(index) ?? [];
+      } else if (_recentPlayedCache.containsKey(index)) {
+        // Phrase déjà lue récemment (ex: bouton "précédent") — fichier
+        // encore sur disque, aucun besoin de resynthèse réseau.
+        audioPath = _recentPlayedCache[index]!;
+        words = _recentPlayedWordCache[index] ?? [];
       } else {
         // Invalider tout pré-chargement en cours qui ne correspond plus
         _prefetchToken++;
@@ -452,6 +484,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
 
       if (myToken != _synthesisToken) return;
 
+      _rememberPlayed(index, audioPath, words);
       _currentWordTimings = words;
       debugPrint('[WORD-TRACK] phrase $index (direct) : ${_currentWordTimings.length} mots '
           '(texte: ${_sentenceTexts[index].split(' ').length} mots)');
@@ -821,6 +854,8 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     _prefetchedWords = null;
     _prefetchCache.clear();
     _prefetchWordCache.clear();
+    _recentPlayedCache.clear();
+    _recentPlayedWordCache.clear();
     isSynthesizingNotifier.value = false;
     playbackState.add(PlaybackState(
       processingState: AudioProcessingState.idle,
