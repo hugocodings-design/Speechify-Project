@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../main.dart' show translationLanguageNotifier;
 import '../models/translation_entry.dart';
 import '../services/translation_service.dart';
@@ -106,7 +107,7 @@ class _TranslationSheetState extends State<TranslationSheet> {
     if (alreadySaved) {
       setState(() => _saved = true);
       messenger.showSnackBar(
-        const SnackBar(content: Text('Déjà enregistré dans vos traductions')),
+        SnackBar(content: Text(AppLocalizations.of(context)!.translationSheet_alreadySaved)),
       );
       return;
     }
@@ -148,6 +149,7 @@ class _TranslationSheetState extends State<TranslationSheet> {
   }
 
   Widget _buildBody(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     switch (_state) {
       case _SheetState.loading:
         return const Center(child: CircularProgressIndicator());
@@ -160,12 +162,12 @@ class _TranslationSheetState extends State<TranslationSheet> {
               children: [
                 Icon(Icons.wifi_off_rounded, size: 48, color: Colors.grey[400]),
                 const SizedBox(height: 12),
-                const Text(
-                  'Pas de connexion — impossible de traduire',
+                Text(
+                  l10n.common_noConnectionTranslation,
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 16),
-                FilledButton(onPressed: _load, child: const Text('Réessayer')),
+                FilledButton(onPressed: _load, child: Text(l10n.common_retry)),
               ],
             ),
           ),
@@ -176,16 +178,17 @@ class _TranslationSheetState extends State<TranslationSheet> {
   }
 
   Widget _buildResult(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          _sectionTitle(context, 'Texte original'),
+          _sectionTitle(context, l10n.translationSheet_originalText),
           const SizedBox(height: 4),
           Text(widget.text, style: Theme.of(context).textTheme.bodyLarge),
           const SizedBox(height: 20),
-          _sectionTitle(context, 'Traduction'),
+          _sectionTitle(context, l10n.translationSheet_translation),
           const SizedBox(height: 4),
           Text(
             _translatedText ?? '',
@@ -212,6 +215,7 @@ class _TranslationSheetState extends State<TranslationSheet> {
   Widget _buildFooter(BuildContext context) {
     if (_state != _SheetState.result) return const SizedBox.shrink();
     final isPreloaded = widget.preloaded != null;
+    final l10n = AppLocalizations.of(context)!;
 
     return SafeArea(
       top: false,
@@ -221,20 +225,20 @@ class _TranslationSheetState extends State<TranslationSheet> {
           children: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Fermer'),
+              child: Text(l10n.common_close),
             ),
             const Spacer(),
             if (isPreloaded)
               TextButton.icon(
                 onPressed: _deletePreloaded,
                 icon: const Icon(Icons.delete_outline_rounded, color: Colors.red),
-                label: const Text('Supprimer', style: TextStyle(color: Colors.red)),
+                label: Text(l10n.common_delete, style: const TextStyle(color: Colors.red)),
               )
             else
               FilledButton.icon(
                 onPressed: _saved ? null : _saveEntry,
                 icon: Icon(_saved ? Icons.check_rounded : Icons.bookmark_add_rounded),
-                label: Text(_saved ? 'Enregistré' : 'Enregistrer'),
+                label: Text(_saved ? l10n.common_saved : l10n.common_save),
               ),
           ],
         ),

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../main.dart';
 import '../models/ebook.dart';
 import '../screens/home_screen.dart' show BookCover;
@@ -87,7 +88,7 @@ class MiniPlayer extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                _formatRemaining(minutesRemaining),
+                                _formatRemaining(context, minutesRemaining),
                                 style: TextStyle(
                                     fontSize: 11, color: Colors.grey[600]),
                               ),
@@ -122,11 +123,11 @@ class MiniPlayer extends StatelessWidget {
     );
   }
 
-  String _formatRemaining(int minutes) {
-    if (minutes <= 0) return 'Presque terminé';
-    if (minutes < 60) return '$minutes min restantes';
+  String _formatRemaining(BuildContext context, int minutes) {
+    final l10n = AppLocalizations.of(context)!;
+    if (minutes < 60) return l10n.miniPlayer_remainingMinutes(minutes);
     final h = minutes ~/ 60;
     final m = minutes % 60;
-    return '${h}h ${m}m restantes';
+    return l10n.miniPlayer_remainingHoursMinutes(h, m);
   }
 }

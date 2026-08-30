@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../main.dart' show audioHandler, dictionaryLanguageNotifier;
 import '../models/dictionary_entry.dart';
 import '../services/dictionary_service.dart';
@@ -47,7 +48,10 @@ class _DictionarySheetState extends State<DictionarySheet> {
   _SheetState _state = _SheetState.loading;
   DictionaryLookup? _lookup;
   bool _saved = false;
-  String _errorMessage = 'Pas de connexion — impossible de chercher ce mot';
+  // null = message générique traduit (common_noConnectionDictionary),
+  // non-null = catégorie d'erreur précise remontée par l'API, mappée à un
+  // message localisé à l'affichage (voir DictionaryNetworkException).
+  DictionaryErrorCode? _errorCode;
 
   /// Langue cible figée au moment de l'ouverture — si l'utilisateur change
   /// la langue du dictionnaire dans Profil pendant que cette fiche est
@@ -100,9 +104,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
       if (!mounted) return;
       setState(() {
         _state = _SheetState.error;
-        _errorMessage = e is DictionaryNetworkException
-            ? e.message
-            : 'Pas de connexion — impossible de chercher ce mot';
+        _errorCode = e is DictionaryNetworkException ? e.code : null;
       });
     }
   }
@@ -130,10 +132,11 @@ class _DictionarySheetState extends State<DictionarySheet> {
         e.wordLower == wordLower && e.ebookId == widget.ebookId && e.targetLang == _targetLang);
 
     final messenger = ScaffoldMessenger.of(context);
+    final l10n = AppLocalizations.of(context)!;
     if (alreadySaved) {
       setState(() => _saved = true);
       messenger.showSnackBar(
-        SnackBar(content: Text('« ${widget.word} » est déjà dans votre liste')),
+        SnackBar(content: Text(l10n.dictionarySheet_alreadyInList(widget.word))),
       );
       return;
     }
@@ -179,6 +182,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
   }
 
   Widget _buildBody(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     switch (_state) {
       case _SheetState.loading:
         return Center(
@@ -187,7 +191,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
             children: [
               const CircularProgressIndicator(),
               const SizedBox(height: 16),
-              Text('Recherche de « ${widget.word} »…'),
+              Text(l10n.dictionarySheet_searching(widget.word)),
             ],
           ),
         );
@@ -200,9 +204,12 @@ class _DictionarySheetState extends State<DictionarySheet> {
               children: [
                 Icon(Icons.wifi_off_rounded, size: 48, color: Colors.grey[400]),
                 const SizedBox(height: 12),
-                Text(_errorMessage, textAlign: TextAlign.center),
+                Text(
+                  _errorMessageFor(l10n, _errorCode),
+                  textAlign: TextAlign.center,
+                ),
                 const SizedBox(height: 16),
-                FilledButton(onPressed: _load, child: const Text('Réessayer')),
+                FilledButton(onPressed: _load, child: Text(l10n.common_retry)),
               ],
             ),
           ),
@@ -214,6 +221,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
 
   Widget _buildResult(BuildContext context) {
     final lookup = _lookup!;
+    final l10n = AppLocalizations.of(context)!;
 
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(20, 8, 20, 16),
@@ -235,7 +243,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
               IconButton(
                 onPressed: _speakWord,
                 icon: const Icon(Icons.volume_up_rounded),
-                tooltip: 'Écouter la prononciation',
+                tooltip: l10n.dictionarySheet_listenPronunciation,
               ),
             ],
           ),
@@ -263,7 +271,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
 
           if (lookup.definition.isNotEmpty) ...[
             const SizedBox(height: 20),
-            _sectionTitle(context, 'Définition'),
+            _sectionTitle(context, l10n.dictionarySheet_definition),
             const SizedBox(height: 4),
             Text(lookup.definition),
           ],
@@ -282,7 +290,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
           // Section masquée entièrement si vide, plutôt qu'un titre orphelin.
           if (lookup.synonyms.isNotEmpty) ...[
             const SizedBox(height: 20),
-            _sectionTitle(context, 'Synonymes'),
+            _sectionTitle(context, l10n.dictionarySheet_synonyms),
             const SizedBox(height: 8),
             Wrap(
               spacing: 8,
@@ -293,6 +301,18 @@ class _DictionarySheetState extends State<DictionarySheet> {
         ],
       ),
     );
+  }
+
+  String _errorMessageFor(AppLocalizations l10n, DictionaryErrorCode? code) {
+    switch (code) {
+      case DictionaryErrorCode.quotaExceeded:
+        return l10n.dictionarySheet_quotaExceeded;
+      case DictionaryErrorCode.unexpectedResponse:
+        return l10n.dictionarySheet_unexpectedResponse;
+      case DictionaryErrorCode.unreachable:
+      case null:
+        return l10n.common_noConnectionDictionary;
+    }
   }
 
   Widget _sectionTitle(BuildContext context, String label) => Text(
@@ -308,6 +328,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
   Widget _buildFooter(BuildContext context) {
     if (_state != _SheetState.result) return const SizedBox.shrink();
     final isPreloaded = widget.preloaded != null;
+    final l10n = AppLocalizations.of(context)!;
 
     return SafeArea(
       top: false,
@@ -317,20 +338,20 @@ class _DictionarySheetState extends State<DictionarySheet> {
           children: [
             TextButton(
               onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Fermer'),
+              child: Text(l10n.common_close),
             ),
             const Spacer(),
             if (isPreloaded)
               TextButton.icon(
                 onPressed: _deletePreloaded,
                 icon: const Icon(Icons.delete_outline_rounded, color: Colors.red),
-                label: const Text('Supprimer', style: TextStyle(color: Colors.red)),
+                label: Text(l10n.common_delete, style: const TextStyle(color: Colors.red)),
               )
             else
               FilledButton.icon(
                 onPressed: _saved ? null : _saveEntry,
                 icon: Icon(_saved ? Icons.check_rounded : Icons.bookmark_add_rounded),
-                label: Text(_saved ? 'Enregistré' : 'Enregistrer'),
+                label: Text(_saved ? l10n.common_saved : l10n.common_save),
               ),
           ],
         ),

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../models/annotation.dart';
 import '../models/dictionary_entry.dart';
 import '../models/translation_entry.dart';
@@ -20,11 +21,12 @@ class AnnotationsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return DefaultTabController(
       length: 3,
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('Annotations'),
+          title: Text(l10n.nav_annotations),
           centerTitle: true,
           elevation: 0,
           automaticallyImplyLeading: filterEbookId != null,
@@ -33,18 +35,18 @@ class AnnotationsScreen extends StatelessWidget {
               : [
                   IconButton(
                     icon: const Icon(Icons.library_books_rounded),
-                    tooltip: 'Toutes les annotations',
+                    tooltip: l10n.annotations_allAnnotations,
                     onPressed: () => Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => const AnnotationsScreen()),
                     ),
                   ),
                 ],
-          bottom: const TabBar(
+          bottom: TabBar(
             tabs: [
-              Tab(text: 'Surlignages'),
-              Tab(text: 'Dictionnaire'),
-              Tab(text: 'Traductions'),
+              Tab(text: l10n.annotations_tabHighlights),
+              Tab(text: l10n.annotations_tabDictionary),
+              Tab(text: l10n.annotations_tabTranslations),
             ],
           ),
         ),
@@ -110,12 +112,13 @@ Widget _fallbackCover() => Container(
       child: const Icon(Icons.menu_book_rounded, size: 20),
     );
 
-String _relativeDate(DateTime dt) {
+String _relativeDate(BuildContext context, DateTime dt) {
+  final l10n = AppLocalizations.of(context)!;
   final diff = DateTime.now().difference(dt);
-  if (diff.inMinutes < 1) return "à l'instant";
-  if (diff.inHours < 1) return 'il y a ${diff.inMinutes} min';
-  if (diff.inDays < 1) return 'il y a ${diff.inHours} h';
-  if (diff.inDays < 7) return 'il y a ${diff.inDays} j';
+  if (diff.inMinutes < 1) return l10n.annotations_justNow;
+  if (diff.inHours < 1) return l10n.annotations_minutesAgo(diff.inMinutes);
+  if (diff.inDays < 1) return l10n.annotations_hoursAgo(diff.inHours);
+  if (diff.inDays < 7) return l10n.annotations_daysAgo(diff.inDays);
   return '${dt.day.toString().padLeft(2, '0')}/${dt.month.toString().padLeft(2, '0')}/${dt.year}';
 }
 
@@ -139,6 +142,7 @@ class _HighlightsList extends StatelessWidget {
         }
 
         if (byBook.isEmpty) {
+          final l10n = AppLocalizations.of(context)!;
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -146,13 +150,13 @@ class _HighlightsList extends StatelessWidget {
                 Icon(Icons.border_color_outlined, size: 64, color: Colors.grey[400]),
                 const SizedBox(height: 12),
                 Text(
-                  'Aucun passage surligné',
+                  l10n.annotations_noHighlights,
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: Colors.grey[500]),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  "Tenez le doigt sur un mot pendant la lecture pour surligner un passage",
+                  l10n.annotations_noHighlightsHint,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: Colors.grey[400]),
@@ -221,12 +225,12 @@ class _AnnotationTile extends StatelessWidget {
         style: Theme.of(context).textTheme.bodyMedium,
       ),
       subtitle: Text(
-        _relativeDate(annotation.createdAt),
+        _relativeDate(context, annotation.createdAt),
         style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
       ),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline_rounded, color: Colors.red),
-        tooltip: 'Supprimer',
+        tooltip: AppLocalizations.of(context)!.common_delete,
         onPressed: () => Hive.box<Annotation>('annotations').delete(annotation.id),
       ),
       onTap: () => Navigator.push(
@@ -259,6 +263,7 @@ class _DictionaryList extends StatelessWidget {
         }
 
         if (byBook.isEmpty) {
+          final l10n = AppLocalizations.of(context)!;
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -266,13 +271,13 @@ class _DictionaryList extends StatelessWidget {
                 Icon(Icons.translate_rounded, size: 64, color: Colors.grey[400]),
                 const SizedBox(height: 12),
                 Text(
-                  'Aucun mot enregistré',
+                  l10n.annotations_noWords,
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: Colors.grey[500]),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Sélectionnez un mot pendant la lecture, puis appuyez sur Définir',
+                  l10n.annotations_noWordsHint,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: Colors.grey[400]),
@@ -364,14 +369,14 @@ class _DictionaryTile extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
             ),
           Text(
-            _relativeDate(entry.createdAt),
+            _relativeDate(context, entry.createdAt),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
           ),
         ],
       ),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline_rounded, color: Colors.red),
-        tooltip: 'Supprimer',
+        tooltip: AppLocalizations.of(context)!.common_delete,
         onPressed: () => Hive.box<DictionaryEntry>('dictionary').delete(entry.id),
       ),
       onTap: () => showModalBottomSheet<void>(
@@ -418,6 +423,7 @@ class _TranslationsList extends StatelessWidget {
         }
 
         if (byBook.isEmpty) {
+          final l10n = AppLocalizations.of(context)!;
           return Center(
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
@@ -425,13 +431,13 @@ class _TranslationsList extends StatelessWidget {
                 Icon(Icons.g_translate_rounded, size: 64, color: Colors.grey[400]),
                 const SizedBox(height: 12),
                 Text(
-                  'Aucune traduction enregistrée',
+                  l10n.annotations_noTranslations,
                   style: Theme.of(context).textTheme.bodyMedium
                       ?.copyWith(color: Colors.grey[500]),
                 ),
                 const SizedBox(height: 4),
                 Text(
-                  'Sélectionnez un mot ou une phrase pendant la lecture, puis appuyez sur Traduire',
+                  l10n.annotations_noTranslationsHint,
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.bodySmall
                       ?.copyWith(color: Colors.grey[400]),
@@ -510,14 +516,14 @@ class _TranslationTile extends StatelessWidget {
             style: TextStyle(color: Theme.of(context).colorScheme.primary),
           ),
           Text(
-            _relativeDate(entry.createdAt),
+            _relativeDate(context, entry.createdAt),
             style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[500]),
           ),
         ],
       ),
       trailing: IconButton(
         icon: const Icon(Icons.delete_outline_rounded, color: Colors.red),
-        tooltip: 'Supprimer',
+        tooltip: AppLocalizations.of(context)!.common_delete,
         onPressed: () => Hive.box<TranslationEntry>('translations').delete(entry.id),
       ),
       // Amène directement au passage exact dans le livre — plutôt que de

@@ -2,6 +2,7 @@ import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'l10n/generated/app_localizations.dart';
 import 'models/ebook.dart';
 import 'models/chapter.dart';
 import 'models/audio_chunk.dart';
@@ -28,6 +29,13 @@ final ValueNotifier<String> dictionaryLanguageNotifier = ValueNotifier('fr');
 /// Cloud Translation) — voir dictionaryLanguageNotifier ci-dessus pour la
 /// raison de la séparation.
 final ValueNotifier<String> translationLanguageNotifier = ValueNotifier('fr');
+
+/// Langue de l'INTERFACE (menus, boutons, dialogues) — distincte de
+/// dictionaryLanguageNotifier/translationLanguageNotifier ci-dessus, qui
+/// contrôlent le contenu généré (définitions, traductions), pas l'UI.
+/// null = suit la langue du téléphone (comportement par défaut au premier
+/// lancement).
+final ValueNotifier<Locale?> appLocaleNotifier = ValueNotifier(null);
 
 // Handler audio global pour la notification de lecture en arrière-plan
 SpeechifyAudioHandler? audioHandler;
@@ -133,6 +141,8 @@ void main() async {
       settings.get('dictionaryLanguage', defaultValue: 'fr') as String;
   translationLanguageNotifier.value =
       settings.get('translationLanguage', defaultValue: 'fr') as String;
+  final savedAppLanguage = settings.get('appLanguage') as String?; // absent = système
+  appLocaleNotifier.value = savedAppLanguage != null ? Locale(savedAppLanguage) : null;
 
   runApp(const SpeechifyApp());
 }
@@ -234,25 +244,37 @@ class _SpeechifyAppState extends State<SpeechifyApp> {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeModeNotifier,
       builder: (context, themeMode, _) {
-        return MaterialApp(
-          title: 'Speechify',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.blue,
-              brightness: Brightness.light,
-            ),
-          ),
-          darkTheme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.blue,
-              brightness: Brightness.dark,
-            ),
-          ),
-          themeMode: themeMode,
-          home: const MainScreen(),
+        return ValueListenableBuilder<Locale?>(
+          valueListenable: appLocaleNotifier,
+          builder: (context, appLocale, _) {
+            return MaterialApp(
+              title: 'Speechify',
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(
+                useMaterial3: true,
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.blue,
+                  brightness: Brightness.light,
+                ),
+              ),
+              darkTheme: ThemeData(
+                useMaterial3: true,
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.blue,
+                  brightness: Brightness.dark,
+                ),
+              ),
+              themeMode: themeMode,
+              locale: appLocale,
+              // Français en premier : langue de repli si celle du téléphone
+              // n'est ni le français ni l'anglais (l'ordre de la liste
+              // générée par AppLocalizations est alphabétique — 'en' avant
+              // 'fr' — donc explicite ici plutôt que réutilisée telle quelle).
+              supportedLocales: const [Locale('fr'), Locale('en')],
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              home: const MainScreen(),
+            );
+          },
         );
       },
     );

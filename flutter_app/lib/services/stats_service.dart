@@ -91,6 +91,22 @@ class StatsService {
     return total;
   }
 
+  /// Nombre de jours consécutifs (jusqu'à aujourd'hui) avec au moins une
+  /// seconde de lecture. Si rien n'a encore été lu aujourd'hui, on part
+  /// d'hier pour ne pas casser la série avant minuit.
+  int getCurrentStreakDays() {
+    final today = _date(DateTime.now());
+    DateTime cursor = (_box.get(dateKey(today), defaultValue: 0) as int) > 0
+        ? today
+        : today.subtract(const Duration(days: 1));
+    int streak = 0;
+    while ((_box.get(dateKey(cursor), defaultValue: 0) as int) > 0) {
+      streak++;
+      cursor = cursor.subtract(const Duration(days: 1));
+    }
+    return streak;
+  }
+
   // ─── Utilitaires ──────────────────────────────────────────────────────────
 
   /// Formate une date en clé Hive 'YYYY-MM-DD'

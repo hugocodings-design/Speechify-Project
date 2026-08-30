@@ -35,6 +35,9 @@ class Ebook {
   @HiveField(9)
   String? coverImagePath; // chemin local vers l'image de couverture extraite
 
+  @HiveField(10)
+  DateTime? lastOpenedAt; // dernière fois que le livre a été ouvert dans le lecteur
+
   Ebook({
     required this.id,
     required this.title,
@@ -46,10 +49,14 @@ class Ebook {
     this.folderId,
     this.totalSentences = 0,
     this.coverImagePath,
+    this.lastOpenedAt,
   });
 
   int get totalWords => chapters.fold(0, (sum, ch) => sum + ch.wordCount);
 
   int get totalChunks =>
       chapters.fold(0, (sum, ch) => sum + (ch.textContent.length ~/ 200));
+
+  bool get isFinished =>
+      totalSentences > 0 && lastReadPosition >= totalSentences - 1;
 }

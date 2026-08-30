@@ -4,11 +4,31 @@ import 'dart:io';
 import 'package:audio_service/audio_service.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart' show Locale;
 import 'package:path_provider/path_provider.dart';
+import '../l10n/generated/app_localizations.dart';
+import '../main.dart' show appLocaleNotifier;
 import 'tts_service.dart';
 import 'local_tts_service.dart';
 import 'google_tts_direct_service.dart';
 import '../models/word_timing.dart';
+
+/// Résout la langue actuelle de l'app (préférence utilisateur, sinon système,
+/// sinon français par défaut) sans BuildContext — ce handler est un singleton
+/// hors de l'arbre de widgets, donc ne peut pas utiliser AppLocalizations.of().
+/// Reproduit la même logique de repli que MaterialApp.supportedLocales dans
+/// main.dart (français en premier).
+AppLocalizations _currentL10n() {
+  final preferred = appLocaleNotifier.value;
+  if (preferred != null) return lookupAppLocalizations(preferred);
+  final systemLocale = PlatformDispatcher.instance.locale;
+  const supported = [Locale('fr'), Locale('en')];
+  final match = supported.firstWhere(
+    (l) => l.languageCode == systemLocale.languageCode,
+    orElse: () => const Locale('fr'),
+  );
+  return lookupAppLocalizations(match);
+}
 
 /// Gère la session média Android (foreground service + notification de lecture).
 /// Contient la boucle complète de synthèse + lecture pour que tout fonctionne
@@ -826,7 +846,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     mediaItem.add(MediaItem(
       id: 'speechify_current',
       title: _bookTitle,
-      artist: 'Phrase ${_currentIndex + 1} / $total',
+      artist: _currentL10n().audioHandler_sentenceProgress(_currentIndex + 1, total),
       // Durée totale = nombre de phrases (proxy arbitraire pour la barre de progression)
       duration: Duration(seconds: total),
     ));

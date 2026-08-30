@@ -27,13 +27,14 @@ class EbookAdapter extends TypeAdapter<Ebook> {
       folderId: fields[7] as String?,
       totalSentences: fields[8] as int? ?? 0,
       coverImagePath: fields[9] as String?,
+      lastOpenedAt: fields[10] as DateTime?,
     );
   }
 
   @override
   void write(BinaryWriter writer, Ebook obj) {
     writer
-      ..writeByte(10)
+      ..writeByte(11)
       ..writeByte(0)
       ..write(obj.id)
       ..writeByte(1)
@@ -53,7 +54,9 @@ class EbookAdapter extends TypeAdapter<Ebook> {
       ..writeByte(8)
       ..write(obj.totalSentences)
       ..writeByte(9)
-      ..write(obj.coverImagePath);
+      ..write(obj.coverImagePath)
+      ..writeByte(10)
+      ..write(obj.lastOpenedAt);
   }
 
   @override

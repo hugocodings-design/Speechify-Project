@@ -3,10 +3,16 @@ import 'package:dio/dio.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../secrets.dart';
 
+/// Catégorie d'erreur réseau — permet à l'UI (dictionary_sheet.dart) d'afficher
+/// un message localisé plutôt que le texte français codé en dur ci-dessous,
+/// qui ne sert alors plus que de repli pour le debug (toString()).
+enum DictionaryErrorCode { quotaExceeded, unexpectedResponse, unreachable }
+
 /// Levée sur un pépin réseau (timeout, pas de connexion, quota épuisé...).
 class DictionaryNetworkException implements Exception {
   final String message;
-  DictionaryNetworkException(this.message);
+  final DictionaryErrorCode code;
+  DictionaryNetworkException(this.message, [this.code = DictionaryErrorCode.unreachable]);
   @override
   String toString() => 'Erreur réseau : $message';
 }
@@ -213,21 +219,27 @@ class DictionaryService {
           continue;
         }
         if (status == 429) {
-          throw DictionaryNetworkException('Quota Gemini temporairement épuisé — réessayez dans un instant');
+          throw DictionaryNetworkException(
+              'Quota Gemini temporairement épuisé — réessayez dans un instant',
+              DictionaryErrorCode.quotaExceeded);
         }
-        throw DictionaryNetworkException(e.message ?? 'Gemini injoignable');
+        throw DictionaryNetworkException(
+            e.message ?? 'Gemini injoignable', DictionaryErrorCode.unreachable);
       } on FormatException {
         // Gemini n'a, dans de très rares cas, pas respecté le schéma JSON
         // demandé — pas la peine de retenter avec les mêmes paramètres.
-        throw DictionaryNetworkException('Réponse inattendue du service');
+        throw DictionaryNetworkException(
+            'Réponse inattendue du service', DictionaryErrorCode.unexpectedResponse);
       } catch (e) {
         // Gemini a répondu, mais dans une forme qu'on ne sait pas
         // interpréter (structure JSON inattendue) — pas la peine de
         // retenter avec les mêmes paramètres.
-        throw DictionaryNetworkException('Erreur inattendue : $e');
+        throw DictionaryNetworkException(
+            'Erreur inattendue : $e', DictionaryErrorCode.unexpectedResponse);
       }
     }
-    throw DictionaryNetworkException('Gemini injoignable après plusieurs tentatives');
+    throw DictionaryNetworkException(
+        'Gemini injoignable après plusieurs tentatives', DictionaryErrorCode.unreachable);
   }
 
   /// Pas de TTL (une définition ne change pas dans le temps), juste un

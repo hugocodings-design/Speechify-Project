@@ -7,6 +7,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../models/ebook.dart';
 import '../models/annotation.dart';
 import '../services/tts_service.dart' show TtsService, Voice;
@@ -1075,7 +1076,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     children: [
                       TextButton(
                         onPressed: _cancelSelection,
-                        child: const Text('Annuler'),
+                        child: Text(AppLocalizations.of(context)!.common_cancel),
                       ),
                       const SizedBox(width: 4),
                       if (singleWord != null) ...[
@@ -1088,7 +1089,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           // fonction, c'est l'interdiction documentée qui a
                           // motivé le fait que la bulle n'affiche déjà pas
                           // d'aperçu du texte sélectionné.
-                          label: const Text('Définir'),
+                          label: Text(AppLocalizations.of(context)!.reader_define),
                         ),
                         const SizedBox(width: 4),
                       ],
@@ -1097,14 +1098,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           onPressed: () => _openTranslationForText(selectedText),
                           icon: const Icon(Icons.g_translate_rounded, size: 18),
                           // Libellé FIXE, même raison que "Définir" ci-dessus.
-                          label: const Text('Traduire'),
+                          label: Text(AppLocalizations.of(context)!.reader_translate),
                         ),
                         const SizedBox(width: 4),
                       ],
                       FilledButton.icon(
                         onPressed: _saveSelectionAsAnnotation,
                         icon: const Icon(Icons.border_color_rounded, size: 18),
-                        label: const Text('Surligner'),
+                        label: Text(AppLocalizations.of(context)!.reader_highlight),
                       ),
                     ],
                   ),
@@ -1268,6 +1269,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        final l10n = AppLocalizations.of(context)!;
         final bottomPad = MediaQuery.of(context).padding.bottom + 24;
         return Padding(
           padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
@@ -1285,7 +1287,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
               ),
-              Text('Dictionnaire',
+              Text(l10n.annotations_tabDictionary,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
@@ -1294,7 +1296,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 builder: (context, lang, _) => ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.language_rounded),
-                  title: const Text('Langue des définitions'),
+                  title: Text(l10n.reader_definitionsLanguage),
                   trailing: DropdownButton<String>(
                     value: lang,
                     underline: const SizedBox(),
@@ -1334,6 +1336,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+          final l10n = AppLocalizations.of(context)!;
           final bottomPad = MediaQuery.of(context).padding.bottom + 24;
           return Padding(
             padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
@@ -1351,14 +1354,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ),
                   ),
                 ),
-                Text('Traduction en direct',
+                Text(l10n.reader_liveTranslationTitle,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Activée'),
-                  subtitle: const Text('Bulle de traduction pendant la lecture'),
+                  title: Text(l10n.reader_enabled),
+                  subtitle: Text(l10n.reader_translationBubbleHint),
                   value: _translationModeEnabled,
                   onChanged: (value) {
                     _setTranslationModeEnabled(value);
@@ -1370,7 +1373,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   builder: (context, lang, _) => ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.language_rounded),
-                    title: const Text('Langue de traduction'),
+                    title: Text(l10n.profileScreen_translationLanguage),
                     trailing: DropdownButton<String>(
                       value: lang,
                       underline: const SizedBox(),
@@ -1953,6 +1956,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _initializeScreen() async {
     ebookBox = Hive.box<Ebook>('ebooks');
+    widget.ebook.lastOpenedAt = DateTime.now();
+    await ebookBox.put(widget.ebook.id, widget.ebook);
     if (widget.ebook.selectedVoiceName.isNotEmpty) {
       setState(() => selectedVoice = widget.ebook.selectedVoiceName);
     }
@@ -2034,7 +2039,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
           return AlertDialog(
-            title: const Text('Vitesse de lecture'),
+            title: Text(AppLocalizations.of(context)!.reader_readingSpeed),
             content: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -2074,7 +2079,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Fermer'),
+                child: Text(AppLocalizations.of(context)!.common_close),
               ),
             ],
           );
@@ -2251,7 +2256,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
                 Text(
-                  'Choisir une voix',
+                  AppLocalizations.of(context)!.reader_chooseVoice,
                   style: Theme.of(context)
                       .textTheme
                       .titleLarge
@@ -2333,7 +2338,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                   Icon(Icons.hd_rounded, size: 15, color: Colors.grey.shade600),
                                   const SizedBox(width: 4),
                                   Text(
-                                    'Haute qualité — sans surlignage mot par mot',
+                                    AppLocalizations.of(context)!.reader_highQualityNoWordHighlight,
                                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                                           color: Colors.grey.shade600,
                                           fontStyle: FontStyle.italic,
@@ -2448,17 +2453,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _showAppearancePanel() {
     final settings = Hive.box('settings');
 
-    // Polices système Android disponibles sans package externe
-    const fonts = [
-      (label: 'Roboto',      value: null,                  preview: 'Aa'),
-      (label: 'Serif',       value: 'serif',               preview: 'Aa'),
-      (label: 'Condensé',    value: 'sans-serif-condensed', preview: 'Aa'),
-      (label: 'Light',       value: 'sans-serif-light',    preview: 'Aa'),
-      (label: 'Medium',      value: 'sans-serif-medium',   preview: 'Aa'),
-      (label: 'Mono',        value: 'monospace',           preview: 'Aa'),
-      (label: 'Cursif',      value: 'cursive',             preview: 'Aa'),
-    ];
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2467,6 +2461,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+          final l10n = AppLocalizations.of(context)!;
+          // Polices système Android disponibles sans package externe
+          final fonts = [
+            (label: 'Roboto',            value: null,                   preview: 'Aa'),
+            (label: 'Serif',             value: 'serif',                preview: 'Aa'),
+            (label: l10n.reader_fontCondensed, value: 'sans-serif-condensed', preview: 'Aa'),
+            (label: 'Light',             value: 'sans-serif-light',     preview: 'Aa'),
+            (label: 'Medium',            value: 'sans-serif-medium',    preview: 'Aa'),
+            (label: 'Mono',              value: 'monospace',            preview: 'Aa'),
+            (label: l10n.reader_fontCursive,   value: 'cursive',              preview: 'Aa'),
+          ];
           // Padding pour la barre Samsung
           final bottomPad = MediaQuery.of(context).padding.bottom + 24;
           return Padding(
@@ -2487,20 +2492,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
 
-                Text('Apparence',
+                Text(l10n.profileScreen_appearance,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 24),
 
                 // ── Fond ──────────────────────────────────────────────────
-                Text('FOND', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_background, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<ThemeMode>(
                   valueListenable: themeModeNotifier,
                   builder: (context, themeMode, _) => Row(
                     children: [
-                      _themeChip(context: context, label: 'Clair',
+                      _themeChip(context: context, label: l10n.profileScreen_light,
                           icon: Icons.light_mode,
                           selected: themeMode == ThemeMode.light,
                           onTap: () {
@@ -2509,7 +2514,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             setModalState(() {});
                           }),
                       const SizedBox(width: 10),
-                      _themeChip(context: context, label: 'Sombre',
+                      _themeChip(context: context, label: l10n.profileScreen_dark,
                           icon: Icons.dark_mode,
                           selected: themeMode == ThemeMode.dark,
                           onTap: () {
@@ -2518,7 +2523,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             setModalState(() {});
                           }),
                       const SizedBox(width: 10),
-                      _themeChip(context: context, label: 'Système',
+                      _themeChip(context: context, label: l10n.profileScreen_system,
                           icon: Icons.brightness_auto,
                           selected: themeMode == ThemeMode.system,
                           onTap: () {
@@ -2532,7 +2537,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 const SizedBox(height: 28),
 
                 // ── Taille du texte ───────────────────────────────────────
-                Text('TAILLE DU TEXTE', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_textSizeSection, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<double>(
@@ -2558,7 +2563,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       Expanded(
                         child: Center(
                           child: Text(
-                            '${fontSize.toInt()} pt',
+                            l10n.profileScreen_pt(fontSize.toInt()),
                             style: TextStyle(fontSize: fontSize.clamp(12, 22), fontWeight: FontWeight.w500),
                           ),
                         ),
@@ -2584,7 +2589,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 const SizedBox(height: 28),
 
                 // ── Police ────────────────────────────────────────────────
-                Text('POLICE', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_fontSection, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<String?>(
@@ -2687,25 +2692,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // ─── Table des matières ───────────────────────────────────────────────────
 
   Future<void> _renameFile() async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController(text: widget.ebook.title);
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Renommer le fichier'),
+        title: Text(l10n.reader_renameFileTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Nom du document'),
+          decoration: InputDecoration(hintText: l10n.reader_documentNameHint),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Renommer'),
+            child: Text(l10n.home_rename),
           ),
         ],
       ),
@@ -2727,6 +2733,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (context) {
         String query = '';
         return StatefulBuilder(builder: (context, setModal) {
+          final l10n = AppLocalizations.of(context)!;
           final results = query.isEmpty
               ? <_SentenceItem>[]
               : _sentences
@@ -2753,7 +2760,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   child: TextField(
                     autofocus: true,
                     decoration: InputDecoration(
-                      hintText: 'Rechercher dans le document…',
+                      hintText: l10n.reader_searchHint,
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: query.isNotEmpty
                           ? IconButton(
@@ -2772,7 +2779,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
-                      '${results.length} résultat${results.length == 1 ? '' : 's'}',
+                      l10n.reader_resultCount(results.length),
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ),
@@ -2812,7 +2819,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 ),
                               ),
                         subtitle: Text(
-                          'Chapitre ${s.chapterIndex + 1} · Phrase ${s.globalIndex + 1}',
+                          l10n.reader_chapterSentence(s.chapterIndex + 1, s.globalIndex + 1),
                           style: const TextStyle(fontSize: 11),
                         ),
                         onTap: () {
@@ -2862,7 +2869,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Text('Table des matières',
+              child: Text(AppLocalizations.of(context)!.reader_tableOfContents,
                   style: Theme.of(context).textTheme.titleMedium),
             ),
             const Divider(height: 1),
@@ -2890,7 +2897,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             fontWeight: isCurrent
                                 ? FontWeight.bold
                                 : FontWeight.normal)),
-                    subtitle: Text('${chapter.wordCount} mots'),
+                    subtitle: Text(AppLocalizations.of(context)!.reader_wordCount(chapter.wordCount)),
                     trailing: isCurrent
                         ? Icon(Icons.volume_up,
                             color: Theme.of(context).colorScheme.primary,
@@ -2926,6 +2933,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: _readerVisible
           ? AppBar(
@@ -2933,7 +2941,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.menu_book_rounded),
-            tooltip: 'Langue du dictionnaire',
+            tooltip: l10n.profileScreen_dictionaryLanguage,
             onPressed: _showDictionaryLanguagePanel,
           ),
           IconButton(
@@ -2941,17 +2949,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
               Icons.translate_rounded,
               color: _translationModeEnabled ? Theme.of(context).colorScheme.primary : null,
             ),
-            tooltip: 'Traduction en direct',
+            tooltip: l10n.reader_liveTranslationTitle,
             onPressed: _showTranslationPanel,
           ),
           IconButton(
             icon: const Icon(Icons.format_size_rounded),
-            tooltip: 'Apparence',
+            tooltip: l10n.profileScreen_appearance,
             onPressed: _showAppearancePanel,
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded),
-            tooltip: 'Options',
+            tooltip: l10n.reader_options,
             onSelected: (value) {
               switch (value) {
                 case 'toc':
@@ -2974,35 +2982,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'toc',
                 child: ListTile(
-                  leading: Icon(Icons.list_alt_rounded),
-                  title: Text('Table des matières'),
+                  leading: const Icon(Icons.list_alt_rounded),
+                  title: Text(l10n.reader_tableOfContents),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'annotations',
                 child: ListTile(
-                  leading: Icon(Icons.border_color_rounded),
-                  title: Text('Annotations de ce livre'),
+                  leading: const Icon(Icons.border_color_rounded),
+                  title: Text(l10n.reader_annotationsOfThisBook),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'search',
                 child: ListTile(
-                  leading: Icon(Icons.search_rounded),
-                  title: Text('Rechercher'),
+                  leading: const Icon(Icons.search_rounded),
+                  title: Text(l10n.reader_search),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'rename',
                 child: ListTile(
-                  leading: Icon(Icons.drive_file_rename_outline_rounded),
-                  title: Text('Renommer le fichier'),
+                  leading: const Icon(Icons.drive_file_rename_outline_rounded),
+                  title: Text(l10n.reader_renameFileTitle),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3013,7 +3021,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ? Icons.visibility_off_rounded
                       : Icons.visibility_rounded),
                   title: Text(
-                      _readerVisible ? 'Masquer le lecteur' : 'Afficher le lecteur'),
+                      _readerVisible ? l10n.reader_hideReader : l10n.reader_showReader),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3024,8 +3032,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ? Icons.sync_disabled_rounded
                       : Icons.sync_rounded),
                   title: Text(_autoScrollEnabled
-                      ? 'Désactiver défilement auto'
-                      : 'Activer défilement auto'),
+                      ? l10n.reader_disableAutoScroll
+                      : l10n.reader_enableAutoScroll),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3038,7 +3046,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ? null
           : FloatingActionButton.small(
               onPressed: () => setState(() => _readerVisible = true),
-              tooltip: 'Afficher les contrôles',
+              tooltip: l10n.reader_showControls,
               backgroundColor: Colors.black45,
               child: const Icon(Icons.tune_rounded, color: Colors.white, size: 18),
             ),
@@ -3274,7 +3282,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 : null,
                             icon: const Icon(Icons.skip_previous_rounded),
                             iconSize: 36,
-                            tooltip: 'Phrase précédente',
+                            tooltip: AppLocalizations.of(context)!.reader_previousSentence,
                           ),
                           const SizedBox(width: 8),
                           Container(
@@ -3302,7 +3310,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                             color: Colors.white,
                                           ),
                                     iconSize: 36,
-                                    tooltip: _wantsToPlay ? 'Pause' : 'Lecture',
+                                    tooltip: _wantsToPlay
+                                        ? AppLocalizations.of(context)!.reader_pause
+                                        : AppLocalizations.of(context)!.reader_play,
                                   ),
                           ),
                           const SizedBox(width: 8),
@@ -3313,7 +3323,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 : null,
                             icon: const Icon(Icons.skip_next_rounded),
                             iconSize: 36,
-                            tooltip: 'Phrase suivante',
+                            tooltip: AppLocalizations.of(context)!.reader_nextSentence,
                           ),
                         ],
                       ),
