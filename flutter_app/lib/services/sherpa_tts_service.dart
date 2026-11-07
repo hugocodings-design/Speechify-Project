@@ -36,6 +36,8 @@ class SherpaVoice {
     required this.languageCode,
     required this.modelId,
     this.sid = 0,
+    this.lang = '',
+    this.britishLexicon = false,
   });
 
   final String name;
@@ -43,6 +45,25 @@ class SherpaVoice {
   final String languageCode;
   final String modelId;
   final int sid;
+
+  /// Kokoro : langue de prononciation (eSpeak) pour les voix non anglaises
+  /// (« fr », « pt-br »). Vide pour l'anglais, qui passe par le lexique.
+  final String lang;
+
+  /// Kokoro : lexique britannique (voix en-GB) plutôt qu'américain.
+  final bool britishLexicon;
+
+  /// Configuration du moteur nécessaire à cette voix : changer de clé
+  /// impose de recharger le modèle.
+  String get engineKey => '$modelId|$lang|${britishLexicon ? 'gb' : 'us'}';
+}
+
+/// Résultat d'une synthèse : instant de début de chaque mot (secondes, dans
+/// l'audio produit) et durée totale.
+class SherpaSynthesis {
+  const SherpaSynthesis(this.wordStarts, this.duration);
+  final List<double> wordStarts;
+  final double duration;
 }
 
 /// Voix IA locales, gratuites : synthèse neuronale faite sur le téléphone
@@ -56,13 +77,25 @@ class SherpaTtsService {
   static bool isSherpaVoice(String voiceName) =>
       voiceName.startsWith(voicePrefix);
 
+  /// Threads du moteur de synthèse (cœurs « performance » du téléphone).
+  static int threads = 4;
+
   static const List<SherpaModelSpec> models = [
+    // Kokoro pleine précision (fp32) : la meilleure qualité disponible hors
+    // ligne. La version compressée (int8) donnait un timbre métallique.
     SherpaModelSpec(
-      id: 'fr-siwis',
-      folder: 'vits-piper-fr_FR-siwis-medium',
+      id: 'kokoro',
+      folder: 'kokoro-multi-lang-v1_0',
+      kind: SherpaModelKind.kokoro,
+      modelFile: 'model.onnx',
+      label: 'Kokoro',
+    ),
+    SherpaModelSpec(
+      id: 'fr-miro',
+      folder: 'vits-piper-fr_FR-miro-high',
       kind: SherpaModelKind.piper,
-      modelFile: 'fr_FR-siwis-medium.onnx',
-      label: 'Piper · Siwis (FR)',
+      modelFile: 'fr_FR-miro-high.onnx',
+      label: 'Piper · Miro (FR)',
     ),
     SherpaModelSpec(
       id: 'fr-tom',
@@ -77,13 +110,6 @@ class SherpaTtsService {
       kind: SherpaModelKind.piper,
       modelFile: 'fr_FR-upmc-medium.onnx',
       label: 'Piper · UPMC (FR)',
-    ),
-    SherpaModelSpec(
-      id: 'fr-miro',
-      folder: 'vits-piper-fr_FR-miro-high',
-      kind: SherpaModelKind.piper,
-      modelFile: 'fr_FR-miro-high.onnx',
-      label: 'Piper · Miro (FR)',
     ),
     SherpaModelSpec(
       id: 'pt-tugao',
@@ -120,79 +146,13 @@ class SherpaTtsService {
       modelFile: 'pt_BR-jeff-medium.onnx',
       label: 'Piper · Jeff (BR)',
     ),
-    SherpaModelSpec(
-      id: 'kokoro',
-      folder: 'kokoro-int8-multi-lang-v1_0',
-      kind: SherpaModelKind.kokoro,
-      modelFile: 'model.int8.onnx',
-      label: 'Kokoro',
-    ),
   ];
 
+  /// Ordre d'affichage : anglais, français, puis portugais. Dans chaque
+  /// langue, les voix Kokoro (meilleure qualité) passent en premier.
+  /// Identifiants Kokoro : ordre des voix du modèle multi-lang v1.0.
   static const List<SherpaVoice> voices = [
-    SherpaVoice(
-      name: 'sherpa-fr-siwis',
-      displayName: 'Siwis',
-      languageCode: 'fr-FR',
-      modelId: 'fr-siwis',
-    ),
-    SherpaVoice(
-      name: 'sherpa-fr-tom',
-      displayName: 'Tom',
-      languageCode: 'fr-FR',
-      modelId: 'fr-tom',
-    ),
-    SherpaVoice(
-      name: 'sherpa-fr-upmc-jessica',
-      displayName: 'Jessica',
-      languageCode: 'fr-FR',
-      modelId: 'fr-upmc',
-      sid: 0,
-    ),
-    SherpaVoice(
-      name: 'sherpa-fr-upmc-pierre',
-      displayName: 'Pierre',
-      languageCode: 'fr-FR',
-      modelId: 'fr-upmc',
-      sid: 1,
-    ),
-    SherpaVoice(
-      name: 'sherpa-fr-miro',
-      displayName: 'Miro',
-      languageCode: 'fr-FR',
-      modelId: 'fr-miro',
-    ),
-    SherpaVoice(
-      name: 'sherpa-pt-tugao',
-      displayName: 'Tugão',
-      languageCode: 'pt-PT',
-      modelId: 'pt-tugao',
-    ),
-    SherpaVoice(
-      name: 'sherpa-pt-miro',
-      displayName: 'Miro',
-      languageCode: 'pt-PT',
-      modelId: 'pt-miro',
-    ),
-    SherpaVoice(
-      name: 'sherpa-pt-dii',
-      displayName: 'Dii',
-      languageCode: 'pt-PT',
-      modelId: 'pt-dii',
-    ),
-    SherpaVoice(
-      name: 'sherpa-pt-faber',
-      displayName: 'Faber',
-      languageCode: 'pt-BR',
-      modelId: 'pt-faber',
-    ),
-    SherpaVoice(
-      name: 'sherpa-pt-jeff',
-      displayName: 'Jeff',
-      languageCode: 'pt-BR',
-      modelId: 'pt-jeff',
-    ),
-    // Kokoro : ordre des identifiants de voix du modèle multi-lang v1.0.
+    // ── Anglais ──
     SherpaVoice(
       name: 'sherpa-kokoro-af_heart',
       displayName: 'Heart',
@@ -220,6 +180,7 @@ class SherpaTtsService {
       languageCode: 'en-GB',
       modelId: 'kokoro',
       sid: 21,
+      britishLexicon: true,
     ),
     SherpaVoice(
       name: 'sherpa-kokoro-bm_george',
@@ -227,6 +188,92 @@ class SherpaTtsService {
       languageCode: 'en-GB',
       modelId: 'kokoro',
       sid: 26,
+      britishLexicon: true,
+    ),
+    // ── Français ──
+    // Même nom qu'avant (ancienne voix Piper Siwis) : les livres qui
+    // l'utilisaient passent automatiquement à la version Kokoro, bien meilleure.
+    SherpaVoice(
+      name: 'sherpa-fr-siwis',
+      displayName: 'Siwis',
+      languageCode: 'fr-FR',
+      modelId: 'kokoro',
+      sid: 30,
+      lang: 'fr',
+    ),
+    SherpaVoice(
+      name: 'sherpa-fr-miro',
+      displayName: 'Miro',
+      languageCode: 'fr-FR',
+      modelId: 'fr-miro',
+    ),
+    SherpaVoice(
+      name: 'sherpa-fr-tom',
+      displayName: 'Tom',
+      languageCode: 'fr-FR',
+      modelId: 'fr-tom',
+    ),
+    SherpaVoice(
+      name: 'sherpa-fr-upmc-jessica',
+      displayName: 'Jessica',
+      languageCode: 'fr-FR',
+      modelId: 'fr-upmc',
+      sid: 0,
+    ),
+    SherpaVoice(
+      name: 'sherpa-fr-upmc-pierre',
+      displayName: 'Pierre',
+      languageCode: 'fr-FR',
+      modelId: 'fr-upmc',
+      sid: 1,
+    ),
+    // ── Portugais (Portugal) ──
+    SherpaVoice(
+      name: 'sherpa-pt-tugao',
+      displayName: 'Tugão',
+      languageCode: 'pt-PT',
+      modelId: 'pt-tugao',
+    ),
+    SherpaVoice(
+      name: 'sherpa-pt-miro',
+      displayName: 'Miro',
+      languageCode: 'pt-PT',
+      modelId: 'pt-miro',
+    ),
+    SherpaVoice(
+      name: 'sherpa-pt-dii',
+      displayName: 'Dii',
+      languageCode: 'pt-PT',
+      modelId: 'pt-dii',
+    ),
+    // ── Portugais (Brésil) ──
+    SherpaVoice(
+      name: 'sherpa-kokoro-pf_dora',
+      displayName: 'Dora',
+      languageCode: 'pt-BR',
+      modelId: 'kokoro',
+      sid: 42,
+      lang: 'pt-br',
+    ),
+    SherpaVoice(
+      name: 'sherpa-kokoro-pm_alex',
+      displayName: 'Alex',
+      languageCode: 'pt-BR',
+      modelId: 'kokoro',
+      sid: 43,
+      lang: 'pt-br',
+    ),
+    SherpaVoice(
+      name: 'sherpa-pt-faber',
+      displayName: 'Faber',
+      languageCode: 'pt-BR',
+      modelId: 'pt-faber',
+    ),
+    SherpaVoice(
+      name: 'sherpa-pt-jeff',
+      displayName: 'Jeff',
+      languageCode: 'pt-BR',
+      modelId: 'pt-jeff',
     ),
   ];
 
@@ -266,6 +313,15 @@ class SherpaTtsService {
     return result;
   }
 
+  /// Première voix installée pour une langue (« fr », « pt »…), pour la
+  /// prononciation d'un mot dans le dictionnaire.
+  Future<SherpaVoice?> firstInstalledVoiceFor(String lang) async {
+    for (final v in await installedVoices()) {
+      if (v.languageCode.toLowerCase().startsWith(lang.toLowerCase())) return v;
+    }
+    return null;
+  }
+
   // ── Synthèse (dans un isolate dédié : generate() est synchrone et lourd,
   //    sur le fil principal il ferait saccader l'écran et le surlignage) ────
 
@@ -287,13 +343,15 @@ class SherpaTtsService {
     return port;
   }
 
-  /// Synthétise [text] avec la voix [voiceName] et écrit un WAV dans [outPath].
-  /// Renvoie l'instant de début (en secondes) de chaque mot de [text]
-  /// (découpé sur les espaces), aligné sur l'audio réellement produit.
-  Future<List<double>> synthesizeToFile({
+  /// Synthétise [text] avec la voix [voiceName], directement à la vitesse
+  /// [speed] (le moteur parle plus vite lui-même : son naturel, et moins de
+  /// calcul qu'en accélérant l'audio après coup), et écrit un WAV dans
+  /// [outPath].
+  Future<SherpaSynthesis> synthesizeToFile({
     required String text,
     required String voiceName,
     required String outPath,
+    double speed = 1.0,
   }) async {
     final voice = voiceByName(voiceName);
     if (voice == null) {
@@ -309,12 +367,16 @@ class SherpaTtsService {
     final reply = ReceivePort();
     worker.send({
       'reply': reply.sendPort,
-      'key': spec.id,
+      'key': voice.engineKey,
       'kind': spec.kind.name,
       'dir': dir,
       'modelFile': spec.modelFile,
+      'lang': voice.lang,
+      'gb': voice.britishLexicon,
+      'threads': threads,
       'text': text,
       'sid': voice.sid,
+      'speed': speed,
       'outPath': outPath,
     });
     final res = await reply.first as Map;
@@ -322,7 +384,10 @@ class SherpaTtsService {
     if (res['ok'] != true) {
       throw Exception(res['error'] ?? 'Échec de la synthèse locale');
     }
-    return (res['times'] as List).cast<double>();
+    return SherpaSynthesis(
+      (res['times'] as List).cast<double>(),
+      (res['duration'] as num).toDouble(),
+    );
   }
 }
 
@@ -340,7 +405,7 @@ void _workerMain(SendPort mainPort) {
     final msg = raw as Map;
     final reply = msg['reply'] as SendPort;
     try {
-      final key = msg['key'] as String;
+      final key = '${msg['key']}|${msg['threads']}';
       if (key != loadedKey) {
         tts?.free();
         tts = null;
@@ -352,7 +417,7 @@ void _workerMain(SendPort mainPort) {
       final audio = tts!.generate(
         text: msg['text'] as String,
         sid: msg['sid'] as int,
-        speed: 1.0,
+        speed: (msg['speed'] as num).toDouble(),
       );
       if (audio.samples.isEmpty || audio.sampleRate <= 0) {
         throw Exception('Synthèse vide');
@@ -361,7 +426,11 @@ void _workerMain(SendPort mainPort) {
           .writeAsBytesSync(_wavBytes(audio.samples, audio.sampleRate));
       final times = alignWordsToAudio(
           msg['text'] as String, audio.samples, audio.sampleRate);
-      reply.send({'ok': true, 'times': times});
+      reply.send({
+        'ok': true,
+        'times': times,
+        'duration': audio.samples.length / audio.sampleRate,
+      });
     } catch (e) {
       reply.send({'ok': false, 'error': '$e'});
     }
@@ -372,6 +441,7 @@ sherpa.OfflineTtsConfig _buildConfig(Map msg) {
   final dir = msg['dir'] as String;
   final modelFile = msg['modelFile'] as String;
   final isKokoro = msg['kind'] == SherpaModelKind.kokoro.name;
+  final threads = msg['threads'] as int;
 
   final model = isKokoro
       ? sherpa.OfflineTtsModelConfig(
@@ -381,9 +451,12 @@ sherpa.OfflineTtsConfig _buildConfig(Map msg) {
             tokens: '$dir/tokens.txt',
             dataDir: '$dir/espeak-ng-data',
             dictDir: '$dir/dict',
-            lexicon: '$dir/lexicon-us-en.txt,$dir/lexicon-zh.txt',
+            lexicon: msg['gb'] == true
+                ? '$dir/lexicon-gb-en.txt,$dir/lexicon-zh.txt'
+                : '$dir/lexicon-us-en.txt,$dir/lexicon-zh.txt',
+            lang: msg['lang'] as String,
           ),
-          numThreads: 4,
+          numThreads: threads,
         )
       : sherpa.OfflineTtsModelConfig(
           vits: sherpa.OfflineTtsVitsModelConfig(
@@ -391,7 +464,7 @@ sherpa.OfflineTtsConfig _buildConfig(Map msg) {
             tokens: '$dir/tokens.txt',
             dataDir: '$dir/espeak-ng-data',
           ),
-          numThreads: 4,
+          numThreads: threads,
         );
 
   return sherpa.OfflineTtsConfig(model: model);

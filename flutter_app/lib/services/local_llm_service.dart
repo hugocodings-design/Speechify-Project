@@ -35,6 +35,21 @@ class LocalLlmService {
     'pt': 'Portuguese',
   };
 
+  /// Vrai pendant le chargement du modèle ou une génération : la synthèse
+  /// vocale se met alors en pause pour laisser tout le processeur à l'IA
+  /// (sinon les deux se partagent les cœurs et l'IA est ~3× plus lente).
+  static final ValueNotifier<bool> busy = ValueNotifier(false);
+  int _busyCount = 0;
+  void _enterBusy() {
+    _busyCount++;
+    busy.value = true;
+  }
+
+  void _leaveBusy() {
+    if (_busyCount > 0) _busyCount--;
+    if (_busyCount == 0) busy.value = false;
+  }
+
   final LlamaController _llama = LlamaController();
   Future<void>? _loading;
   bool _loaded = false;
@@ -78,7 +93,10 @@ class LocalLlmService {
   /// Charge le modèle et met le préambule commun en cache, en arrière-plan,
   /// pour que la première vraie demande réponde vite. Sans effet si le
   /// modèle n'est pas installé.
-  Future<void> warmUp() async {
+  /// [pauseAudio] : faux pour un préchargement de fond (à l'ouverture d'un
+  /// livre) — le chargement lit surtout le stockage et ne gêne pas la voix ;
+  /// on ne met donc pas la synthèse vocale en pause pour lui.
+  Future<void> warmUp({bool pauseAudio = true}) async {
     // Déjà prêt, ou une demande est en cours : ne surtout pas l'interrompre.
     if (_warmed || _warming) return;
     final active = _activeDone;
@@ -86,7 +104,7 @@ class LocalLlmService {
     if (!await isInstalled()) return;
     _warming = true;
     try {
-      await _warmUpNow();
+      await _warmUpNow(pauseAudio);
       _warmed = true;
     } finally {
       _warming = false;
@@ -96,9 +114,11 @@ class LocalLlmService {
   bool _warmed = false;
   bool _warming = false;
 
-  Future<void> _warmUpNow() async {
+  Future<void> _warmUpNow(bool pauseAudio) async {
     try {
-      await for (final _ in _generate(_userTurn('Reply with: OK'), maxTokens: 1)) {}
+      // Préchauffe avec le préambule de « Dans cette phrase », la demande
+      // la plus fréquente : il reste ensuite en cache dans le moteur.
+      await for (final _ in _generate(_contextTurn('Reply with: OK'), maxTokens: 1, pauseAudio: pauseAudio)) {}
     } catch (e) {
       debugPrint('[LOCAL-LLM] préchauffage échoué : $e');
     }
@@ -122,9 +142,32 @@ class LocalLlmService {
       'EXAMPLE: <a NEW short example sentence, written in the example language>\n'
       'SYNONYMS: <up to 4 true synonyms in the answer language, comma-separated, '
       'or the word none>\n'
+      'TASK CONTEXT: give the meaning of one word in one given sentence, very '
+      'briefly. Answer with exactly these two lines and nothing else:\n'
+      'TRANSLATION: <the word translated into the answer language, as used in '
+      'the sentence; the word itself if same language>\n'
+      'MEANING: <at most 20 words, in the answer language: what the word means '
+      'in this sentence>\n'
       'TASK TRANSLATE: translate the given text faithfully and naturally, '
       'keeping its tone, names and punctuation. Answer with the translation only, '
       'no quotes, no notes.';
+
+  /// Préambule COURT, dédié au sens d'un mot dans sa phrase : ~4× moins de
+  /// texte à lire que le préambule commun, donc une réponse bien plus rapide.
+  static const String _contextSystem =
+      'You explain one word as used in one sentence, briefly. Dictionary senses '
+      'may be given: rely on them. Answer with exactly these two lines and '
+      'nothing else:\n'
+      'TRANSLATION: <ONLY the word itself translated into the answer language '
+      '(1 to 3 words), never the whole sentence; the word itself if same '
+      'language>\n'
+      'MEANING: <at most 15 words, in the answer language: what the word means '
+      'in this sentence>';
+
+  static String _contextTurn(String content) =>
+      '<|im_start|>system\n$_contextSystem<|im_end|>\n'
+      '<|im_start|>user\n$content<|im_end|>\n'
+      '<|im_start|>assistant\n';
 
   static String _userTurn(String content) =>
       '<|im_start|>system\n$_system<|im_end|>\n'
@@ -134,7 +177,7 @@ class LocalLlmService {
   // ── Génération ────────────────────────────────────────────────────────────
 
   Stream<String> _generate(String prompt,
-      {required int maxTokens, double temperature = 0.2}) async* {
+      {required int maxTokens, double temperature = 0.2, bool pauseAudio = true}) async* {
     final serial = ++_requestSerial;
 
     // Interrompre la demande précédente et attendre qu'elle soit vraiment
@@ -146,8 +189,21 @@ class LocalLlmService {
     }
     if (serial != _requestSerial) return; // déjà remplacée par une plus récente
 
-    await _ensureLoaded();
-    if (serial != _requestSerial) return;
+    if (pauseAudio) _enterBusy();
+    void leave() {
+      if (pauseAudio) _leaveBusy();
+    }
+
+    try {
+      await _ensureLoaded();
+    } catch (e) {
+      leave();
+      rethrow;
+    }
+    if (serial != _requestSerial) {
+      leave();
+      return;
+    }
 
     final done = Completer<void>();
     _activeDone = done;
@@ -168,6 +224,7 @@ class LocalLlmService {
       _warmed = true; // le préambule commun est désormais en cache
     } finally {
       if (!done.isCompleted) done.complete();
+      leave();
     }
   }
 
@@ -200,6 +257,36 @@ class LocalLlmService {
     yield LocalDefinition.parse(text, complete: true);
   }
 
+  // ── Sens dans la phrase (complément rapide du dictionnaire hors ligne) ────
+
+  /// Réponse courte (~20 mots, 2-3 s) : traduction du mot et sens qu'il a
+  /// dans [sentence]. Chaque élément du flux est la réponse à jour.
+  Stream<LocalContextMeaning> explainInContext({
+    required String word,
+    required String sentence,
+    required String sourceLang,
+    required String targetLang,
+    List<String> senses = const [],
+  }) async* {
+    final src = languageNames[sourceLang] ?? sourceLang;
+    final tgt = languageNames[targetLang] ?? targetLang;
+    // Sens du dictionnaire hors ligne : ils ancrent la réponse (évite les
+    // contresens, ex. « sótão » = grenier, pas sous-sol).
+    final hints = senses
+        .take(4)
+        .map((g) => g.length > 70 ? '${g.substring(0, 70)}…' : g)
+        .join(' | ');
+    var text = '';
+    await for (final piece in _generate(
+        _contextTurn('Word ($src): $word\nSentence: $sentence\n'
+            '${hints.isEmpty ? '' : 'Dictionary senses: $hints\n'}'
+            'Answer language: $tgt'),
+        maxTokens: 50)) {
+      text += piece;
+      yield LocalContextMeaning.parse(text);
+    }
+  }
+
   // ── Traduction ────────────────────────────────────────────────────────────
 
   /// Traduit [text] ; chaque élément du flux est la traduction partielle à jour.
@@ -219,6 +306,19 @@ class LocalLlmService {
       out += piece;
       yield out.trimLeft();
     }
+  }
+}
+
+/// Sens d'un mot dans sa phrase (réponse éventuellement partielle).
+class LocalContextMeaning {
+  const LocalContextMeaning(this.translation, this.meaning);
+  final String translation;
+  final String meaning;
+
+  factory LocalContextMeaning.parse(String raw) {
+    final d = LocalDefinition.parse(raw.replaceAll(
+        RegExp(r'^\s*MEANING\s*:', caseSensitive: false, multiLine: true), 'DEFINITION:'));
+    return LocalContextMeaning(d.translatedWord, d.definition);
   }
 }
 

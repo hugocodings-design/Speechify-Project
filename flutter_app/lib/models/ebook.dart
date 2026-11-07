@@ -18,7 +18,7 @@ class Ebook {
   int lastReadPosition = 0;
 
   @HiveField(4)
-  String selectedVoiceName = "en-US-Neural2-D";
+  String selectedVoiceName = "sherpa-kokoro-af_heart";
 
   @HiveField(5)
   final DateTime uploadedAt;
@@ -45,7 +45,7 @@ class Ebook {
     required this.uploadedAt,
     required this.fileFormat,
     this.lastReadPosition = 0,
-    this.selectedVoiceName = "en-US-Neural2-D",
+    this.selectedVoiceName = "sherpa-kokoro-af_heart",
     this.folderId,
     this.totalSentences = 0,
     this.coverImagePath,

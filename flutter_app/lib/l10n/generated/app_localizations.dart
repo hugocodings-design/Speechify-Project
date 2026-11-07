@@ -428,6 +428,24 @@ abstract class AppLocalizations {
   /// **'Quota temporairement épuisé — réessayez dans un instant'**
   String get dictionarySheet_quotaExceeded;
 
+  /// No description provided for @dictionarySheet_localModelMissing.
+  ///
+  /// In fr, this message translates to:
+  /// **'Le modèle d\'IA locale n\'est pas installé sur ce téléphone — le dictionnaire fonctionne entièrement sur l\'appareil'**
+  String get dictionarySheet_localModelMissing;
+
+  /// No description provided for @dictionarySheet_inThisSentence.
+  ///
+  /// In fr, this message translates to:
+  /// **'Dans cette phrase'**
+  String get dictionarySheet_inThisSentence;
+
+  /// No description provided for @dictionarySheet_formOf.
+  ///
+  /// In fr, this message translates to:
+  /// **'Forme de « {lemma} »'**
+  String dictionarySheet_formOf(String lemma);
+
   /// No description provided for @dictionarySheet_unexpectedResponse.
   ///
   /// In fr, this message translates to:
@@ -1345,6 +1363,30 @@ abstract class AppLocalizations {
   /// In fr, this message translates to:
   /// **'Phrase suivante'**
   String get reader_nextSentence;
+
+  /// No description provided for @reader_readTranslationAloud.
+  ///
+  /// In fr, this message translates to:
+  /// **'Lire la traduction à voix haute'**
+  String get reader_readTranslationAloud;
+
+  /// No description provided for @reader_readTranslationAloudHint.
+  ///
+  /// In fr, this message translates to:
+  /// **'La voix lit la traduction à la place du texte du livre'**
+  String get reader_readTranslationAloudHint;
+
+  /// No description provided for @reader_translationVoice.
+  ///
+  /// In fr, this message translates to:
+  /// **'Voix de la traduction'**
+  String get reader_translationVoice;
+
+  /// No description provided for @reader_noVoiceForLanguage.
+  ///
+  /// In fr, this message translates to:
+  /// **'Aucune voix installée pour cette langue'**
+  String get reader_noVoiceForLanguage;
 
   /// No description provided for @reader_pause.
   ///

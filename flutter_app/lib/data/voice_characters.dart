@@ -1,4 +1,3 @@
-import '../services/local_tts_service.dart';
 import '../services/sherpa_tts_service.dart';
 import 'chirp3_personas.dart';
 
@@ -111,43 +110,6 @@ const Map<String, VoiceCharacter> voiceCharacters = {
   'pt-PT-Wavenet-F': VoiceCharacter(
     name: 'Tiago', language: 'Portugais (Portugal)', photoAsset: '$_base/pt-PT-Neural2-B.jpg',
   ),
-
-  // Voix locales (hors ligne) — Anglais (US)
-  'local-en-US-f1': VoiceCharacter(
-    name: 'Nora', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-f1.jpg', isLocal: true,
-  ),
-  'local-en-US-f2': VoiceCharacter(
-    name: 'Ivy', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-f2.jpg', isLocal: true,
-  ),
-  'local-en-US-f3': VoiceCharacter(
-    name: 'Willow', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-f3.jpg', isLocal: true,
-  ),
-  'local-en-US-m1': VoiceCharacter(
-    name: 'Cole', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-m1.jpg', isLocal: true,
-  ),
-  'local-en-US-m2': VoiceCharacter(
-    name: 'Grant', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-m2.jpg', isLocal: true,
-  ),
-  'local-en-US-m3': VoiceCharacter(
-    name: 'Beau', language: 'Anglais (US) · hors ligne', photoAsset: '$_base/local-en-US-m3.jpg', isLocal: true,
-  ),
-
-  // Voix locales (hors ligne) — Français (France)
-  'local-fr-FR-f1': VoiceCharacter(
-    name: 'Manon', language: 'Français (France) · hors ligne', photoAsset: '$_base/local-fr-FR-f1.jpg', isLocal: true,
-  ),
-  'local-fr-FR-f2': VoiceCharacter(
-    name: 'Élise', language: 'Français (France) · hors ligne', photoAsset: '$_base/local-fr-FR-f2.jpg', isLocal: true,
-  ),
-  'local-fr-FR-f3': VoiceCharacter(
-    name: 'Pauline', language: 'Français (France) · hors ligne', photoAsset: '$_base/local-fr-FR-f3.jpg', isLocal: true,
-  ),
-  'local-fr-FR-m1': VoiceCharacter(
-    name: 'Hugo', language: 'Français (France) · hors ligne', photoAsset: '$_base/local-fr-FR-m1.jpg', isLocal: true,
-  ),
-  'local-fr-FR-m2': VoiceCharacter(
-    name: 'Théo', language: 'Français (France) · hors ligne', photoAsset: '$_base/local-fr-FR-m2.jpg', isLocal: true,
-  ),
 };
 
 /// Personnages Chirp3-HD — pas de vraie photo (voix nouvelles, pas de
@@ -171,7 +133,7 @@ final Map<String, VoiceCharacter> allVoiceCharacters = {
   ...chirp3Characters,
 };
 
-/// Personnage pour une voix — gère aussi les voix locales (préfixe "local-")
+/// Personnage pour une voix — gère aussi les voix IA locales
 /// non encore répertoriées avec une vraie photo, en repli générique.
 VoiceCharacter characterForVoice(String voiceName) {
   final known = allVoiceCharacters[voiceName];
@@ -190,19 +152,6 @@ VoiceCharacter characterForVoice(String voiceName) {
       name: ai.displayName,
       language: '${languages[ai.languageCode] ?? ai.languageCode} · IA locale',
       photoAsset: '',
-    );
-  }
-
-  if (voiceName.startsWith('local-')) {
-    final local = LocalTtsService.availableVoices.firstWhere(
-      (v) => v.name == voiceName,
-      orElse: () => LocalTtsService.availableVoices.first,
-    );
-    return VoiceCharacter(
-      name: 'Voix locale',
-      language: '${local.language} · hors ligne',
-      photoAsset: '',
-      isLocal: true,
     );
   }
 

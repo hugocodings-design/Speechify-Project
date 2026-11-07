@@ -29,7 +29,6 @@ dependencies:
 
   # TTS local (voix hors-ligne, moteur natif du téléphone — pas de réseau,
   # pas de quota, fonctionne en 4G loin de la maison)
-  flutter_tts: ^4.2.0
 
   # Local database
   hive: ^2.2.3
@@ -77,6 +76,7 @@ dependencies:
   google_mlkit_translation: ^0.13.1
   llama_flutter_android:
     path: packages/llama_flutter_android
+  sqflite: ^2.4.2+1
 
 dev_dependencies:
   flutter_test:

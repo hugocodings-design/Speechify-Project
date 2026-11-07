@@ -10,8 +10,7 @@ import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
 import '../l10n/generated/app_localizations.dart';
 import '../models/ebook.dart';
 import '../models/annotation.dart';
-import '../services/tts_service.dart' show TtsService, Voice;
-import '../services/local_tts_service.dart';
+import '../services/tts_service.dart' show Voice;
 import '../services/sherpa_tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/translation_service.dart';
@@ -22,7 +21,6 @@ import '../main.dart'
         audioHandler, ensureAudioHandler;
 import '../services/stats_service.dart';
 import '../data/voice_characters.dart';
-import '../data/cloud_voices.dart';
 import '../widgets/voice_avatar.dart';
 import '../widgets/translation_sheet.dart';
 import '../widgets/dictionary_sheet.dart';
@@ -551,7 +549,6 @@ class ReaderScreen extends StatefulWidget {
 }
 
 class _ReaderScreenState extends State<ReaderScreen> {
-  late TtsService _ttsService;
 
   // Abonnement à l'état de lecture du handler (playbackState)
   StreamSubscription<dynamic>? _playerStateSub;
@@ -638,8 +635,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // voir _buildTranslationBubble pour pourquoi c'est nécessaire.
   Offset? _dragStartBubbleOffset;
 
+  /// Mode « lire la traduction » : la voix lit la traduction (dans la bulle,
+  /// avec suivi des mots) au lieu du texte du livre, qui continue d'être
+  /// suivi en parallèle. Voix choisie mémorisée par langue de traduction.
+  bool _readTranslationAloud = false;
+
   List<Voice> availableVoices = [];
-  String selectedVoice = "en-US-Neural2-C";
+  String selectedVoice = "sherpa-kokoro-af_heart";
   String selectedLanguageCode = "en-US";
 
   bool _isSynthesizing = false;
@@ -664,7 +666,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _ttsService = TtsService();
     _buildFlatList();
     _annotationBox = Hive.box<Annotation>('annotations');
     _loadSavedHighlights();
@@ -1086,51 +1087,80 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// écran. L'utilisateur peut néanmoins la faire glisser (appui prolongé +
   /// déplacement) à l'endroit de son choix — voir _translationBubbleOffset.
   Widget _buildTranslationBubble(BuildContext context) {
-    final translation = _currentTranslation;
-    if (translation == null) return const SizedBox.shrink();
+    final h = audioHandler;
+    final readingAloud = h != null && h.isReadingTranslation;
+    final fallback = _currentTranslation;
+    if (!readingAloud && fallback == null) return const SizedBox.shrink();
 
     final screenSize = MediaQuery.sizeOf(context);
-    // Largeur FIXE (plutôt que left/right qui étirent jusqu'aux bords) dès
-    // qu'on connaît une position glissée : sans ça, la bulle collerait
-    // toujours au bord droit de l'écran une fois posée près du bord gauche.
-    const bubbleWidth = 280.0;
-    final offset = _translationBubbleOffset ??
-        Offset((screenSize.width - bubbleWidth) / 2, 8);
-    // Bornes larges plutôt qu'une mesure exacte de la hauteur de la bulle
-    // (variable selon la longueur du texte traduit) : suffisant pour
-    // l'empêcher de sortir complètement de l'écran, pas besoin de plus de
-    // précision pour ce geste de confort.
-    final clampedLeft = offset.dx.clamp(0.0, (screenSize.width - bubbleWidth).clamp(0.0, double.infinity));
-    final clampedTop = offset.dy.clamp(0.0, screenSize.height - 120);
+    final scheme = Theme.of(context).colorScheme;
+    // Toute la largeur de l'écran (marge de 12 px) : le texte tient sur moins
+    // de lignes, la bulle est moins haute. Seule la position verticale se
+    // déplace (appui prolongé + glisser).
+    final top = (_translationBubbleOffset?.dy ?? 8).clamp(0.0, screenSize.height - 160);
+    final baseStyle = TextStyle(
+      color: scheme.onPrimaryContainer,
+      fontSize: 16,
+      height: 1.4,
+    );
+
+    Widget content;
+    if (readingAloud) {
+      // Lecture de la traduction : la bulle affiche EXACTEMENT ce que la voix
+      // prononce, avec le mot en cours surligné.
+      content = ValueListenableBuilder<String?>(
+        valueListenable: h.spokenTextNotifier,
+        builder: (context, spoken, _) {
+          final text = spoken ?? fallback ?? '';
+          return ValueListenableBuilder<int>(
+            valueListenable: h.spokenWordIndexNotifier,
+            builder: (context, active, _) {
+              final words = text.split(RegExp(r'(?<=\s)'));
+              var wordIdx = -1;
+              return Text.rich(
+                TextSpan(style: baseStyle, children: [
+                  for (final w in words)
+                    TextSpan(
+                      text: w,
+                      style: (w.trim().isNotEmpty && ++wordIdx == active)
+                          ? TextStyle(
+                              fontWeight: FontWeight.w700,
+                              backgroundColor: scheme.primary.withValues(alpha: 0.22),
+                            )
+                          : null,
+                    ),
+                ]),
+              );
+            },
+          );
+        },
+      );
+    } else {
+      content = Text(fallback!, style: baseStyle);
+    }
 
     return Positioned(
-      left: clampedLeft,
-      top: clampedTop,
-      width: bubbleWidth,
+      left: 12,
+      right: 12,
+      top: top,
       child: GestureDetector(
-        // offsetFromOrigin est mesuré depuis le POINT DE DÉPART de l'appui
-        // prolongé, pas depuis la dernière position — il faut donc partir
-        // d'une position de référence fixée une fois au début du geste
-        // (_dragStartBubbleOffset), sinon le déplacement s'additionne à
-        // chaque frame et la bulle s'envole beaucoup plus vite que le doigt.
-        onLongPressStart: (_) => _dragStartBubbleOffset = Offset(clampedLeft, clampedTop),
+        // offsetFromOrigin part du point de départ de l'appui prolongé : on
+        // repart donc d'une position de référence fixée au début du geste.
+        onLongPressStart: (_) => _dragStartBubbleOffset = Offset(0, top),
         onLongPressMoveUpdate: (details) {
           final start = _dragStartBubbleOffset;
           if (start == null) return;
           setState(() {
-            _translationBubbleOffset = start + details.offsetFromOrigin;
+            _translationBubbleOffset = Offset(0, start.dy + details.offsetFromOrigin.dy);
           });
         },
         child: Material(
-          color: Theme.of(context).colorScheme.primaryContainer,
+          color: scheme.primaryContainer,
           elevation: 4,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Text(
-              translation,
-              style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
-            ),
+            child: content,
           ),
         ),
       ),
@@ -1183,7 +1213,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.sizeOf(context).width - 32,
                   ),
-                  child: Row(
+                  // Boutons compacts + réduction automatique si la place
+                  // manque encore (4 boutons sur un écran étroit) : jamais
+                  // de débordement à droite.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: TextButtonTheme(
+                    data: TextButtonThemeData(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: FilledButtonTheme(
+                    data: FilledButtonThemeData(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       TextButton(
@@ -1221,6 +1270,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ),
                     ],
                   ),
+                  ),
+                  ),
+                  ),
                 ),
               ),
             ),
@@ -1254,7 +1306,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       sentences: _sentences.map((s) => s.text).toList(),
       bookTitle: widget.ebook.title,
       ebookId: widget.ebook.id,
-      ttsService: _ttsService,
       voiceName: selectedVoice,
       languageCode: selectedLanguageCode,
       speed: _playbackSpeed,
@@ -1378,9 +1429,49 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (_translationModeEnabled) {
       final src = DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName);
       // Télécharge les modèles ML Kit (une fois) puis traduit la phrase.
-      TranslationService.prepareLive(src, translationLanguageNotifier.value)
-          .then((_) => _loadTranslationForCurrentSentence());
+      TranslationService.prepareLive(src, translationLanguageNotifier.value).then((_) {
+        _loadTranslationForCurrentSentence();
+        _applyTranslationReading();
+      });
+    } else {
+      _applyTranslationReading();
     }
+  }
+
+  /// Voix installées pour la langue de traduction [lang] (« fr », « pt »…).
+  List<Voice> _voicesForLanguage(String lang) => availableVoices
+      .where((v) => v.languageCode.toLowerCase().startsWith('${lang.toLowerCase()}-'))
+      .toList();
+
+  /// Voix choisie pour lire la traduction dans [lang] (mémorisée), sinon la
+  /// première voix installée de cette langue.
+  String? _translationVoiceFor(String lang) {
+    final voices = _voicesForLanguage(lang);
+    if (voices.isEmpty) return null;
+    final saved = Hive.box('settings').get('translationVoice_$lang') as String?;
+    return voices.any((v) => v.name == saved) ? saved : voices.first.name;
+  }
+
+  /// Synchronise le lecteur audio avec le mode « lire la traduction ».
+  void _applyTranslationReading() {
+    final h = audioHandler;
+    if (h == null) return;
+    final target = translationLanguageNotifier.value;
+    final src = DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName);
+    final voice = _translationVoiceFor(target);
+    final active = _translationModeEnabled && _readTranslationAloud && voice != null && src != target;
+    if (!active) {
+      if (h.isReadingTranslation) h.setTranslationReading();
+      return;
+    }
+    h.setTranslationReading(
+      voiceName: voice,
+      textProvider: (i) => _translationService.translateLive(
+        text: _sentences[i].text,
+        sourceLang: src,
+        targetLang: target,
+      ),
+    );
   }
 
   /// Panneau ouvert en tapant sur l'icône de dictionnaire de l'AppBar : ne
@@ -1519,11 +1610,67 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         // Redemande la traduction de la phrase courante tout
                         // de suite dans la nouvelle langue, plutôt que
                         // d'attendre le prochain changement de phrase.
-                        if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+                        if (_translationModeEnabled) {
+                          final src = DictionaryService.langFromVoiceName(
+                              widget.ebook.selectedVoiceName);
+                          TranslationService.prepareLive(src, value).then((_) {
+                            _loadTranslationForCurrentSentence();
+                            _applyTranslationReading();
+                          });
+                        }
+                        setModalState(() {});
                       },
                     ),
                   ),
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.record_voice_over_rounded),
+                  title: Text(l10n.reader_readTranslationAloud),
+                  subtitle: Text(l10n.reader_readTranslationAloudHint),
+                  value: _readTranslationAloud,
+                  onChanged: !_translationModeEnabled
+                      ? null
+                      : (value) {
+                          setState(() => _readTranslationAloud = value);
+                          setModalState(() {});
+                          _applyTranslationReading();
+                        },
+                ),
+                if (_readTranslationAloud && _translationModeEnabled)
+                  Builder(builder: (context) {
+                    final lang = translationLanguageNotifier.value;
+                    final voices = _voicesForLanguage(lang);
+                    if (voices.isEmpty) {
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.info_outline_rounded),
+                        title: Text(l10n.reader_noVoiceForLanguage),
+                      );
+                    }
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.mic_rounded),
+                      title: Text(l10n.reader_translationVoice),
+                      trailing: DropdownButton<String>(
+                        value: _translationVoiceFor(lang),
+                        underline: const SizedBox(),
+                        items: [
+                          for (final v in voices)
+                            DropdownMenuItem(
+                              value: v.name,
+                              child: Text('${v.displayName} (${v.languageCode})'),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          Hive.box('settings').put('translationVoice_$lang', value);
+                          setModalState(() {});
+                          _applyTranslationReading();
+                        },
+                      ),
+                    );
+                  }),
               ],
             ),
           );
@@ -2104,26 +2251,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
     }
 
-    // Les voix cloud sont synthétisées en appel direct à l'API Google (clé
-    // API), donc plus besoin du backend ni du Wi-Fi maison — la liste est
-    // simplement hardcodée (vérifiée une à une contre le vrai catalogue
-    // Google). Les voix locales restent disponibles hors ligne comme avant.
-    // Voix IA locales : uniquement celles dont le modèle est installé sur le
-    // téléphone. Placées en premier pour que cette nouvelle section soit
-    // facile à trouver dans le sélecteur.
+    // 100 % gratuit : uniquement les voix IA locales installées sur le
+    // téléphone, dans l'ordre anglais → français → portugais.
     final aiVoices = await SherpaTtsService.instance.installedVoices();
     final voices = <Voice>[
       ...aiVoices.map((v) => Voice(
             name: v.name,
             displayName: v.displayName,
             languageCode: v.languageCode,
-          )),
-      ...allCloudVoices,
-      ...LocalTtsService.availableVoices.map((v) => Voice(
-            name: v.name,
-            displayName: v.language,
-            languageCode: v.languageCode,
-            isLocal: true,
           )),
     ];
 
@@ -2135,11 +2270,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
       // Mettre à jour la voix dans le handler maintenant qu'on a le bon languageCode
       audioHandler?.updateVoice(savedVoice.name, savedVoice.languageCode);
     } else if (voices.isNotEmpty) {
-      // La voix sauvegardée pour ce livre n'existe plus (catalogue Google
-      // modifié depuis) — on bascule sur une voix valide, si possible dans
-      // la même langue, plutôt que de rester bloqué sur un nom de voix qui
-      // échouera à chaque tentative de synthèse.
-      final fallback = voices.where((v) => v.languageCode == selectedLanguageCode).firstOrNull ??
+      // La voix sauvegardée n'existe plus (ancienne voix cloud Google,
+      // retirée car payante) — on bascule sur une voix gratuite DE LA MÊME
+      // LANGUE que l'ancienne : d'abord la même variante (fr-FR), sinon la
+      // même langue (fr-CA → fr-FR), les voix IA locales passant en premier.
+      final oldLocale =
+          RegExp(r'([a-z]{2})-([A-Z]{2})').firstMatch(selectedVoice)?.group(0) ??
+              selectedLanguageCode;
+      final oldLang = oldLocale.split('-').first;
+      final fallback = voices.where((v) => v.languageCode == oldLocale).firstOrNull ??
+          voices.where((v) => v.languageCode.startsWith('$oldLang-')).firstOrNull ??
           voices.first;
       setState(() {
         selectedVoice = fallback.name;
@@ -2149,6 +2289,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       widget.ebook.selectedVoiceName = fallback.name;
       await ebookBox.put(widget.ebook.id, widget.ebook);
     }
+
+    // Précharge l'IA locale en arrière-plan (sans gêner la voix) : elle sera
+    // prête quand l'utilisateur touchera « Définir ».
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) unawaited(LocalLlmService.instance.warmUp(pauseAudio: false));
+    });
 
     // Demander les permissions requises pour la lecture en arrière-plan
     await _requestBackgroundPermissions();
@@ -3241,13 +3387,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
           : null,
       floatingActionButton: _readerVisible
           ? null
+          // Lecteur masqué : œil ouvert en bas à droite pour le réafficher.
           : FloatingActionButton.small(
               onPressed: () => setState(() => _readerVisible = true),
-              tooltip: l10n.reader_showControls,
-              backgroundColor: Colors.black45,
-              child: const Icon(Icons.tune_rounded, color: Colors.white, size: 18),
+              tooltip: l10n.reader_showReader,
+              backgroundColor: Colors.black54,
+              child: const Icon(Icons.visibility_rounded, color: Colors.white, size: 20),
             ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.miniEndTop,
+      floatingActionButtonLocation: FloatingActionButtonLocation.miniEndFloat,
       body: Column(
         children: [
           // ── Texte + bouton de retour ─────────────────────────────────────
@@ -3473,6 +3620,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          // Espace symétrique de celui de l'œil à droite :
+                          // les contrôles restent centrés.
+                          const Expanded(child: SizedBox()),
                           IconButton(
                             onPressed: _currentGlobalIndex > 0 && !_isSynthesizing
                                 ? () => audioHandler?.playSentenceAt(_currentGlobalIndex - 1)
@@ -3522,6 +3672,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             iconSize: 36,
                             tooltip: AppLocalizations.of(context)!.reader_nextSentence,
                           ),
+                          // Masquer le lecteur : centré entre « phrase
+                          // suivante » et le bouton de vitesse.
+                          Expanded(
+                            child: Center(
+                              child: IconButton(
+                                onPressed: () => setState(() => _readerVisible = false),
+                                icon: const Icon(Icons.visibility_off_rounded),
+                                iconSize: 24,
+                                visualDensity: VisualDensity.compact,
+                                color: Theme.of(context).colorScheme.primary,
+                                tooltip: AppLocalizations.of(context)!.reader_hideReader,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -3564,7 +3728,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _readingStopwatch.stop();
       _flushReadingTime();
     }
-    _ttsService.cancel();
     audioHandler?.currentIndexNotifier.removeListener(_onHandlerIndexChanged);
     audioHandler?.isSynthesizingNotifier.removeListener(_onHandlerSynthesizingChanged);
     audioHandler?.shouldBePlayingNotifier.removeListener(_onHandlerWantsToPlayChanged);

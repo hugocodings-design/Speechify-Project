@@ -62,6 +62,10 @@
   "dictionarySheet_definition": "Definition",
   "dictionarySheet_synonyms": "Synonyms",
   "dictionarySheet_quotaExceeded": "Quota temporarily exhausted — try again in a moment",
+  "dictionarySheet_localModelMissing": "The local AI model isn't installed on this phone — the dictionary runs entirely on the device",
+  "dictionarySheet_inThisSentence": "In this sentence",
+  "dictionarySheet_formOf": "Form of “{lemma}”",
+  "@dictionarySheet_formOf": { "placeholders": { "lemma": { "type": "String" } } },
   "dictionarySheet_unexpectedResponse": "Unexpected response from the service",
 
   "translationSheet_alreadySaved": "Already saved in your translations",
@@ -223,6 +227,10 @@
   "reader_showControls": "Show controls",
   "reader_previousSentence": "Previous sentence",
   "reader_nextSentence": "Next sentence",
+  "reader_readTranslationAloud": "Read the translation aloud",
+  "reader_readTranslationAloudHint": "The voice reads the translation instead of the book's text",
+  "reader_translationVoice": "Translation voice",
+  "reader_noVoiceForLanguage": "No voice installed for this language",
   "reader_pause": "Pause",
   "reader_play": "Play",
   "audioHandler_sentenceProgress": "Sentence {current} / {total}"

@@ -223,6 +223,18 @@ class AppLocalizationsEn extends AppLocalizations {
       'Quota temporarily exhausted — try again in a moment';
 
   @override
+  String get dictionarySheet_localModelMissing =>
+      'The local AI model isn\'t installed on this phone — the dictionary runs entirely on the device';
+
+  @override
+  String get dictionarySheet_inThisSentence => 'In this sentence';
+
+  @override
+  String dictionarySheet_formOf(String lemma) {
+    return 'Form of “$lemma”';
+  }
+
+  @override
   String get dictionarySheet_unexpectedResponse =>
       'Unexpected response from the service';
 
@@ -812,6 +824,20 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get reader_nextSentence => 'Next sentence';
+
+  @override
+  String get reader_readTranslationAloud => 'Read the translation aloud';
+
+  @override
+  String get reader_readTranslationAloudHint =>
+      'The voice reads the translation instead of the book\'s text';
+
+  @override
+  String get reader_translationVoice => 'Translation voice';
+
+  @override
+  String get reader_noVoiceForLanguage =>
+      'No voice installed for this language';
 
   @override
   String get reader_pause => 'Pause';
