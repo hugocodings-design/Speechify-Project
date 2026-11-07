@@ -72,6 +72,69 @@ class AppLocalizationsEn extends AppLocalizations {
   String get mainScreen_bookCreatedFromScan => 'Book created from scan';
 
   @override
+  String get mainScreen_addFromUrl => 'Add from a website';
+
+  @override
+  String get mainScreen_addFromUrlSubtitle => 'Paste a link to an article';
+
+  @override
+  String get mainScreen_urlHint => 'https://example.com/article';
+
+  @override
+  String get mainScreen_bookCreatedFromUrl => 'Book created from web page(s)';
+
+  @override
+  String get urlImport_addLink => 'Add link';
+
+  @override
+  String get urlImport_orderHint =>
+      'Links are read in this order — drag to reorder';
+
+  @override
+  String get urlImport_empty =>
+      'Paste a link above and tap + to add it.\nAdd several to combine them into a single book, in order.';
+
+  @override
+  String get urlImport_bookTitle => 'Book title';
+
+  @override
+  String urlImport_defaultTitle(int count) {
+    return '$count web pages';
+  }
+
+  @override
+  String get urlImport_create => 'Create book';
+
+  @override
+  String urlImport_partialFailure(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count pages',
+      one: '1 page',
+    );
+    return '$_temp0 could not be fetched — the rest were added.';
+  }
+
+  @override
+  String get urlImport_continuationFound =>
+      'This page continues on another page — add it too?';
+
+  @override
+  String get urlImport_add => 'Add';
+
+  @override
+  String urlImport_words(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count words',
+      one: '1 word',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get recentScreen_inProgress => 'In progress';
 
   @override
@@ -652,6 +715,12 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get reader_readingSpeed => 'Reading speed';
+
+  @override
+  String get reader_slower => 'Slower';
+
+  @override
+  String get reader_faster => 'Faster';
 
   @override
   String get reader_chooseVoice => 'Choose a voice';

@@ -1,4 +1,5 @@
 import '../services/local_tts_service.dart';
+import '../services/sherpa_tts_service.dart';
 import 'chirp3_personas.dart';
 
 /// Un personnage fictif associé à une voix TTS : nom, langue et photo.
@@ -175,6 +176,22 @@ final Map<String, VoiceCharacter> allVoiceCharacters = {
 VoiceCharacter characterForVoice(String voiceName) {
   final known = allVoiceCharacters[voiceName];
   if (known != null) return known;
+
+  final ai = SherpaTtsService.voiceByName(voiceName);
+  if (ai != null) {
+    const languages = {
+      'fr-FR': 'Français (France)',
+      'en-US': 'Anglais (US)',
+      'en-GB': 'Anglais (UK)',
+      'pt-PT': 'Portugais (Portugal)',
+      'pt-BR': 'Portugais (Brésil)',
+    };
+    return VoiceCharacter(
+      name: ai.displayName,
+      language: '${languages[ai.languageCode] ?? ai.languageCode} · IA locale',
+      photoAsset: '',
+    );
+  }
 
   if (voiceName.startsWith('local-')) {
     final local = LocalTtsService.availableVoices.firstWhere(

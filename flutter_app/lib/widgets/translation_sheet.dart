@@ -51,6 +51,7 @@ class _TranslationSheetState extends State<TranslationSheet> {
   _SheetState _state = _SheetState.loading;
   String? _translatedText;
   bool _saved = false;
+  bool _streaming = false;
 
   /// Langue cible figée au moment de l'ouverture — si l'utilisateur change
   /// la langue de traduction dans Profil pendant que cette fiche est
@@ -77,21 +78,33 @@ class _TranslationSheetState extends State<TranslationSheet> {
       return;
     }
 
-    setState(() => _state = _SheetState.loading);
+    setState(() {
+      _state = _SheetState.loading;
+      _streaming = true;
+    });
     try {
-      final translated = await _service.translate(
+      // Flux : avec l'IA locale, la traduction s'affiche pendant qu'elle
+      // s'écrit.
+      await for (final partial in _service.translateStream(
         text: widget.text,
         sourceLang: widget.sourceLang,
         targetLang: _targetLang,
-      );
+      )) {
+        if (!mounted) return;
+        if (partial.isEmpty) continue;
+        setState(() {
+          _translatedText = partial;
+          _state = _SheetState.result;
+        });
+      }
       if (!mounted) return;
-      setState(() {
-        _translatedText = translated;
-        _state = _SheetState.result;
-      });
+      setState(() => _streaming = false);
     } catch (_) {
       if (!mounted) return;
-      setState(() => _state = _SheetState.error);
+      setState(() {
+        _streaming = false;
+        _state = _SheetState.error;
+      });
     }
   }
 
@@ -184,6 +197,11 @@ class _TranslationSheetState extends State<TranslationSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (_streaming)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
           _sectionTitle(context, l10n.translationSheet_originalText),
           const SizedBox(height: 4),
           Text(widget.text, style: Theme.of(context).textTheme.bodyLarge),
@@ -236,7 +254,7 @@ class _TranslationSheetState extends State<TranslationSheet> {
               )
             else
               FilledButton.icon(
-                onPressed: _saved ? null : _saveEntry,
+                onPressed: _saved || _streaming ? null : _saveEntry,
                 icon: Icon(_saved ? Icons.check_rounded : Icons.bookmark_add_rounded),
                 label: Text(_saved ? l10n.common_saved : l10n.common_save),
               ),

@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
@@ -11,6 +13,7 @@ import 'models/annotation.dart';
 import 'models/dictionary_entry.dart';
 import 'models/translation_entry.dart';
 import 'screens/main_screen.dart';
+import 'services/llm_selftest.dart';
 import 'services/speechify_audio_handler.dart';
 
 // Préférences globales accessibles partout dans l'app
@@ -145,6 +148,10 @@ void main() async {
   appLocaleNotifier.value = savedAppLanguage != null ? Locale(savedAppLanguage) : null;
 
   runApp(const SpeechifyApp());
+
+  // Debug uniquement, et seulement si un fichier déclencheur a été déposé
+  // via adb — voir llm_selftest.dart.
+  unawaited(runLlmSelfTestIfRequested());
 }
 
 /// Ouvre une box Hive, et si sa lecture échoue (typiquement un

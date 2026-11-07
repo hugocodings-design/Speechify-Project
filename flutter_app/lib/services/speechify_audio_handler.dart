@@ -11,6 +11,7 @@ import '../main.dart' show appLocaleNotifier;
 import 'tts_service.dart';
 import 'local_tts_service.dart';
 import 'google_tts_direct_service.dart';
+import 'sherpa_tts_service.dart';
 import '../models/word_timing.dart';
 
 /// Résout la langue actuelle de l'app (préférence utilisateur, sinon système,
@@ -483,23 +484,19 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
         _prefetchToken++;
 
         final callStart = DateTime.now();
-        debugPrint('[LOAD-TRACK] phrase $index : appel réseau démarré (token=$myToken)');
-        final result = await _googleTts.synthesizeText(
+        debugPrint('[LOAD-TRACK] phrase $index : synthèse démarrée (token=$myToken)');
+        final synthesized = await _synthesizeToFile(
           text: _sentenceTexts[index],
-          voiceName: _voiceName,
-          languageCode: _languageCode,
+          filePrefix: 'sentence',
+          index: index,
         );
         final elapsed = DateTime.now().difference(callStart).inMilliseconds;
-        debugPrint('[LOAD-TRACK] phrase $index : appel réseau terminé en ${elapsed}ms '
+        debugPrint('[LOAD-TRACK] phrase $index : synthèse terminée en ${elapsed}ms '
             '(token=$myToken, actuel=$_synthesisToken)');
         if (myToken != _synthesisToken) return;
 
-        final audioBytes = base64Decode(result['audio_content'] as String);
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/sentence_$index.mp3');
-        await tempFile.writeAsBytes(audioBytes);
-        audioPath = tempFile.path;
-        words = parseWordTimings(result['word_timings']);
+        audioPath = synthesized.path;
+        words = synthesized.words;
       }
 
       if (myToken != _synthesisToken) return;
@@ -621,19 +618,15 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
         filePath = _prefetchCache.remove(nextIndex)!;
         words = _prefetchWordCache.remove(nextIndex) ?? [];
       } else {
-        final result = await _googleTts.synthesizeText(
+        final synthesized = await _synthesizeToFile(
           text: _sentenceTexts[nextIndex],
-          voiceName: _voiceName,
-          languageCode: _languageCode,
+          filePrefix: 'prefetch',
+          index: nextIndex,
         );
         if (myToken != _prefetchToken) return;
 
-        final audioBytes = base64Decode(result['audio_content'] as String);
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/prefetch_$nextIndex.mp3');
-        await tempFile.writeAsBytes(audioBytes);
-        filePath = tempFile.path;
-        words = parseWordTimings(result['word_timings']);
+        filePath = synthesized.path;
+        words = synthesized.words;
       }
 
       if (myToken != _prefetchToken) return;
@@ -666,7 +659,20 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     if (_isLocalVoice) return;
     unawaited(_prefetchNext(currentIndex));
     unawaited(_prefetchToFile(currentIndex + 2));
+    // Voix IA locales : aucun quota, une phrase d'avance de plus pour
+    // absorber les phrases longues (le moteur sur le téléphone est séquentiel).
+    if (SherpaTtsService.isSherpaVoice(_voiceName)) {
+      unawaited(_prefetchToFile(currentIndex + 3));
+    }
   }
+
+  /// Synthèses IA locales en cours, par voix + texte. Le moteur local ne
+  /// traite qu'une phrase à la fois : sans ce partage, le préchargement
+  /// "buffer" relançait la même phrase que le préchargement "disque" encore
+  /// en file d'attente — chaque phrase était synthétisée deux fois, et la
+  /// lecture rattrapait le préchargement (pauses "chargement" en pleine lecture).
+  final Map<String, Future<({String path, List<WordTiming> words})>>
+      _sherpaInFlight = {};
 
   /// Pré-synthétise une phrase sur disque et la place dans le cache
   /// (sans la charger dans un player — ça, c'est le rôle de _prefetchNext).
@@ -677,27 +683,65 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
     final myGeneration = _voiceGeneration;
 
     try {
-      final result = await _googleTts.synthesizeText(
+      final synthesized = await _synthesizeToFile(
         text: _sentenceTexts[index],
-        voiceName: _voiceName,
-        languageCode: _languageCode,
+        filePrefix: 'prefetch2',
+        index: index,
       );
       // La voix a changé pendant l'attente : ce fichier ne correspond plus
       if (myGeneration != _voiceGeneration) return;
 
-      final audioBytes = base64Decode(result['audio_content'] as String);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/prefetch2_$index.mp3');
-      await tempFile.writeAsBytes(audioBytes);
-
-      if (myGeneration != _voiceGeneration) return;
-      final words = parseWordTimings(result['word_timings']);
-      _prefetchCache[index] = tempFile.path;
+      final words = synthesized.words;
+      _prefetchCache[index] = synthesized.path;
       _prefetchWordCache[index] = words;
       debugPrint('[WORD-TRACK] préchargement phrase $index (disque) : ${words.length} mots');
     } catch (e) {
       debugPrint('[WORD-TRACK] ⚠ échec préchargement phrase $index (disque) : $e');
     }
+  }
+
+  /// Synthétise une phrase vers un fichier audio avec le moteur de la voix
+  /// courante : voix IA locale (WAV, sans réseau ni timings) ou voix cloud
+  /// Google (MP3 + timings mot par mot). Sans timings, le surlignage mot à
+  /// mot est estimé à partir de la durée du fichier (voir _estimateWordTimings).
+  Future<({String path, List<WordTiming> words})> _synthesizeToFile({
+    required String text,
+    required String filePrefix,
+    required int index,
+  }) async {
+    final tempDir = await getTemporaryDirectory();
+
+    if (SherpaTtsService.isSherpaVoice(_voiceName)) {
+      final key = '$_voiceName\u0000$text';
+      final pending = _sherpaInFlight[key];
+      if (pending != null) return pending;
+
+      final path = '${tempDir.path}/${filePrefix}_$index.wav';
+      final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+      final future = SherpaTtsService.instance
+          .synthesizeToFile(text: text, voiceName: _voiceName, outPath: path)
+          .then((times) => (
+                path: path,
+                words: times.length == words.length
+                    ? [for (var i = 0; i < words.length; i++) WordTiming(words[i], times[i])]
+                    : <WordTiming>[],
+              ));
+      _sherpaInFlight[key] = future;
+      try {
+        return await future;
+      } finally {
+        _sherpaInFlight.remove(key);
+      }
+    }
+
+    final result = await _googleTts.synthesizeText(
+      text: text,
+      voiceName: _voiceName,
+      languageCode: _languageCode,
+    );
+    final file = File('${tempDir.path}/${filePrefix}_$index.mp3');
+    await file.writeAsBytes(base64Decode(result['audio_content'] as String));
+    return (path: file.path, words: parseWordTimings(result['word_timings']));
   }
 
   void _swapPlayers() {

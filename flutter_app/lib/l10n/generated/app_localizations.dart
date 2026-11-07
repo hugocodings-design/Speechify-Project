@@ -194,6 +194,90 @@ abstract class AppLocalizations {
   /// **'Livre créé à partir du scan'**
   String get mainScreen_bookCreatedFromScan;
 
+  /// No description provided for @mainScreen_addFromUrl.
+  ///
+  /// In fr, this message translates to:
+  /// **'Ajouter depuis un site web'**
+  String get mainScreen_addFromUrl;
+
+  /// No description provided for @mainScreen_addFromUrlSubtitle.
+  ///
+  /// In fr, this message translates to:
+  /// **'Collez le lien d\'un article'**
+  String get mainScreen_addFromUrlSubtitle;
+
+  /// No description provided for @mainScreen_urlHint.
+  ///
+  /// In fr, this message translates to:
+  /// **'https://exemple.com/article'**
+  String get mainScreen_urlHint;
+
+  /// No description provided for @mainScreen_bookCreatedFromUrl.
+  ///
+  /// In fr, this message translates to:
+  /// **'Livre créé à partir de page(s) web'**
+  String get mainScreen_bookCreatedFromUrl;
+
+  /// No description provided for @urlImport_addLink.
+  ///
+  /// In fr, this message translates to:
+  /// **'Ajouter le lien'**
+  String get urlImport_addLink;
+
+  /// No description provided for @urlImport_orderHint.
+  ///
+  /// In fr, this message translates to:
+  /// **'Les liens sont lus dans cet ordre — glissez pour réordonner'**
+  String get urlImport_orderHint;
+
+  /// No description provided for @urlImport_empty.
+  ///
+  /// In fr, this message translates to:
+  /// **'Collez un lien ci-dessus et appuyez sur + pour l\'ajouter.\nAjoutez-en plusieurs pour les combiner en un seul livre, dans l\'ordre.'**
+  String get urlImport_empty;
+
+  /// No description provided for @urlImport_bookTitle.
+  ///
+  /// In fr, this message translates to:
+  /// **'Titre du livre'**
+  String get urlImport_bookTitle;
+
+  /// No description provided for @urlImport_defaultTitle.
+  ///
+  /// In fr, this message translates to:
+  /// **'{count} pages web'**
+  String urlImport_defaultTitle(int count);
+
+  /// No description provided for @urlImport_create.
+  ///
+  /// In fr, this message translates to:
+  /// **'Créer le livre'**
+  String get urlImport_create;
+
+  /// No description provided for @urlImport_partialFailure.
+  ///
+  /// In fr, this message translates to:
+  /// **'{count, plural, one{1 page n\'a} other{{count} pages n\'ont}} pas pu être récupérée(s) — les autres ont été ajoutées.'**
+  String urlImport_partialFailure(int count);
+
+  /// No description provided for @urlImport_continuationFound.
+  ///
+  /// In fr, this message translates to:
+  /// **'Cette page se poursuit sur une autre page — l\'ajouter aussi ?'**
+  String get urlImport_continuationFound;
+
+  /// No description provided for @urlImport_add.
+  ///
+  /// In fr, this message translates to:
+  /// **'Ajouter'**
+  String get urlImport_add;
+
+  /// No description provided for @urlImport_words.
+  ///
+  /// In fr, this message translates to:
+  /// **'{count, plural, one{1 mot} other{{count} mots}}'**
+  String urlImport_words(int count);
+
   /// No description provided for @recentScreen_inProgress.
   ///
   /// In fr, this message translates to:
@@ -1105,6 +1189,18 @@ abstract class AppLocalizations {
   /// In fr, this message translates to:
   /// **'Vitesse de lecture'**
   String get reader_readingSpeed;
+
+  /// No description provided for @reader_slower.
+  ///
+  /// In fr, this message translates to:
+  /// **'Plus lent'**
+  String get reader_slower;
+
+  /// No description provided for @reader_faster.
+  ///
+  /// In fr, this message translates to:
+  /// **'Plus rapide'**
+  String get reader_faster;
 
   /// No description provided for @reader_chooseVoice.
   ///

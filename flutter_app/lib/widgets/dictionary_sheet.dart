@@ -28,6 +28,10 @@ class DictionarySheet extends StatefulWidget {
   /// qu'"Enregistrer".
   final DictionaryEntry? preloaded;
 
+  /// Phrase du livre où le mot a été sélectionné — l'IA locale explique le
+  /// sens qu'il a dans CETTE phrase.
+  final String? contextSentence;
+
   const DictionarySheet({
     Key? key,
     required this.word,
@@ -35,6 +39,7 @@ class DictionarySheet extends StatefulWidget {
     this.ebookId = '',
     this.chapterId = '',
     this.preloaded,
+    this.contextSentence,
   }) : super(key: key);
 
   @override
@@ -47,6 +52,10 @@ class _DictionarySheetState extends State<DictionarySheet> {
 
   _SheetState _state = _SheetState.loading;
   DictionaryLookup? _lookup;
+
+  /// Vrai tant que l'IA locale écrit encore la fiche (bouton Enregistrer
+  /// désactivé, petite barre de progression en haut).
+  bool _streaming = false;
   bool _saved = false;
   // null = message générique traduit (common_noConnectionDictionary),
   // non-null = catégorie d'erreur précise remontée par l'API, mappée à un
@@ -88,21 +97,31 @@ class _DictionarySheetState extends State<DictionarySheet> {
       return;
     }
 
-    setState(() => _state = _SheetState.loading);
+    setState(() {
+      _state = _SheetState.loading;
+      _streaming = true;
+    });
     try {
-      final lookup = await _service.lookup(
+      // Flux : avec l'IA locale, la fiche se remplit pendant que le modèle
+      // écrit (premiers mots en 1-2 s au lieu d'attendre la réponse entière).
+      await for (final lookup in _service.lookupStream(
         word: widget.word,
         sourceLang: widget.sourceLang,
         targetLang: _targetLang,
-      );
+        contextSentence: widget.contextSentence,
+      )) {
+        if (!mounted) return;
+        setState(() {
+          _lookup = lookup;
+          _state = _SheetState.result;
+        });
+      }
       if (!mounted) return;
-      setState(() {
-        _lookup = lookup;
-        _state = _SheetState.result;
-      });
+      setState(() => _streaming = false);
     } catch (e) {
       if (!mounted) return;
       setState(() {
+        _streaming = false;
         _state = _SheetState.error;
         _errorCode = e is DictionaryNetworkException ? e.code : null;
       });
@@ -228,6 +247,11 @@ class _DictionarySheetState extends State<DictionarySheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          if (_streaming)
+            const Padding(
+              padding: EdgeInsets.only(bottom: 8),
+              child: LinearProgressIndicator(minHeight: 2),
+            ),
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
@@ -349,7 +373,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
               )
             else
               FilledButton.icon(
-                onPressed: _saved ? null : _saveEntry,
+                onPressed: _saved || _streaming ? null : _saveEntry,
                 icon: Icon(_saved ? Icons.check_rounded : Icons.bookmark_add_rounded),
                 label: Text(_saved ? l10n.common_saved : l10n.common_save),
               ),

@@ -10,6 +10,7 @@ import 'recent_screen.dart';
 import 'profile_screen.dart';
 import 'scan/camera_capture_screen.dart';
 import 'annotations_screen.dart';
+import 'url_import_screen.dart';
 import '../widgets/mini_player.dart';
 
 class MainScreen extends StatefulWidget {
@@ -134,8 +135,31 @@ class _MainScreenState extends State<MainScreen> {
                 _startScan();
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.link),
+              title: Text(l10n.mainScreen_addFromUrl),
+              subtitle: Text(l10n.mainScreen_addFromUrlSubtitle),
+              onTap: () {
+                Navigator.pop(ctx);
+                _addFromUrl();
+              },
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _addFromUrl() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const UrlImportScreen()),
+    );
+    if (!mounted || created != true) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(AppLocalizations.of(context)!.mainScreen_bookCreatedFromUrl),
+        backgroundColor: Colors.green,
       ),
     );
   }

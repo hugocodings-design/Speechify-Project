@@ -73,6 +73,70 @@ class AppLocalizationsFr extends AppLocalizations {
   String get mainScreen_bookCreatedFromScan => 'Livre créé à partir du scan';
 
   @override
+  String get mainScreen_addFromUrl => 'Ajouter depuis un site web';
+
+  @override
+  String get mainScreen_addFromUrlSubtitle => 'Collez le lien d\'un article';
+
+  @override
+  String get mainScreen_urlHint => 'https://exemple.com/article';
+
+  @override
+  String get mainScreen_bookCreatedFromUrl =>
+      'Livre créé à partir de page(s) web';
+
+  @override
+  String get urlImport_addLink => 'Ajouter le lien';
+
+  @override
+  String get urlImport_orderHint =>
+      'Les liens sont lus dans cet ordre — glissez pour réordonner';
+
+  @override
+  String get urlImport_empty =>
+      'Collez un lien ci-dessus et appuyez sur + pour l\'ajouter.\nAjoutez-en plusieurs pour les combiner en un seul livre, dans l\'ordre.';
+
+  @override
+  String get urlImport_bookTitle => 'Titre du livre';
+
+  @override
+  String urlImport_defaultTitle(int count) {
+    return '$count pages web';
+  }
+
+  @override
+  String get urlImport_create => 'Créer le livre';
+
+  @override
+  String urlImport_partialFailure(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count pages n\'ont',
+      one: '1 page n\'a',
+    );
+    return '$_temp0 pas pu être récupérée(s) — les autres ont été ajoutées.';
+  }
+
+  @override
+  String get urlImport_continuationFound =>
+      'Cette page se poursuit sur une autre page — l\'ajouter aussi ?';
+
+  @override
+  String get urlImport_add => 'Ajouter';
+
+  @override
+  String urlImport_words(int count) {
+    String _temp0 = intl.Intl.pluralLogic(
+      count,
+      locale: localeName,
+      other: '$count mots',
+      one: '1 mot',
+    );
+    return '$_temp0';
+  }
+
+  @override
   String get recentScreen_inProgress => 'En cours';
 
   @override
@@ -658,6 +722,12 @@ class AppLocalizationsFr extends AppLocalizations {
 
   @override
   String get reader_readingSpeed => 'Vitesse de lecture';
+
+  @override
+  String get reader_slower => 'Plus lent';
+
+  @override
+  String get reader_faster => 'Plus rapide';
 
   @override
   String get reader_chooseVoice => 'Choisir une voix';

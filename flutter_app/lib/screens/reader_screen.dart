@@ -12,8 +12,10 @@ import '../models/ebook.dart';
 import '../models/annotation.dart';
 import '../services/tts_service.dart' show TtsService, Voice;
 import '../services/local_tts_service.dart';
+import '../services/sherpa_tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/translation_service.dart';
+import '../services/local_llm_service.dart';
 import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
         translationLanguageNotifier,
@@ -145,22 +147,16 @@ class _HighlightedParagraph extends StatelessWidget {
           // paragraphes se remesurent en même temps) ne doit jamais faire
           // planter tout l'écran de lecture avec le rectangle d'erreur
           // rouge de Flutter — au pire, le texte s'affiche sans surlignage.
+          return _CachedTextPainter(
+            text: text,
+            placeholderCount: placeholderCount,
+            maxWidth: constraints.maxWidth,
+            textDirection: Directionality.of(context),
+            builder: (painter) {
+          if (painter == null) {
+            return RichText(text: text, textAlign: TextAlign.justify);
+          }
           try {
-            final painter = TextPainter(
-              text: text,
-              textAlign: TextAlign.justify,
-              textDirection: Directionality.of(context),
-            );
-            if (placeholderCount > 0) {
-              painter.setPlaceholderDimensions(List.generate(
-                placeholderCount,
-                (_) => const PlaceholderDimensions(
-                  size: Size.zero,
-                  alignment: PlaceholderAlignment.middle,
-                ),
-              ));
-            }
-            painter.layout(maxWidth: constraints.maxWidth);
             final paragraphSize = Size(constraints.maxWidth, painter.height);
 
             // Traduit une position locale en un mot, en la bornant d'abord
@@ -283,9 +279,100 @@ class _HighlightedParagraph extends StatelessWidget {
           } catch (_) {
             return RichText(text: text, textAlign: TextAlign.justify);
           }
+            },
+          );
         },
       ),
     );
+  }
+}
+
+/// Garde UN TextPainter par paragraphe et ne le refait que si le texte, la
+/// largeur ou le nombre d'ancres change. Avant, un TextPainter neuf était
+/// créé (et jamais libéré) à chaque tick de mot (~25 ms) pendant la lecture :
+/// des milliers de mises en page natives s'accumulaient en mémoire.
+class _CachedTextPainter extends StatefulWidget {
+  final InlineSpan text;
+  final int placeholderCount;
+  final double maxWidth;
+  final TextDirection textDirection;
+  final Widget Function(TextPainter? painter) builder;
+
+  const _CachedTextPainter({
+    required this.text,
+    required this.placeholderCount,
+    required this.maxWidth,
+    required this.textDirection,
+    required this.builder,
+  });
+
+  @override
+  State<_CachedTextPainter> createState() => _CachedTextPainterState();
+}
+
+class _CachedTextPainterState extends State<_CachedTextPainter> {
+  TextPainter? _painter;
+  InlineSpan? _laidOutText;
+  double? _laidOutWidth;
+  int? _laidOutPlaceholders;
+  TextDirection? _laidOutDirection;
+
+  TextPainter _painterFor() {
+    final cached = _painter;
+    if (cached != null &&
+        identical(_laidOutText, widget.text) &&
+        _laidOutWidth == widget.maxWidth &&
+        _laidOutPlaceholders == widget.placeholderCount &&
+        _laidOutDirection == widget.textDirection) {
+      return cached;
+    }
+
+    final painter = TextPainter(
+      text: widget.text,
+      textAlign: TextAlign.justify,
+      textDirection: widget.textDirection,
+    );
+    if (widget.placeholderCount > 0) {
+      painter.setPlaceholderDimensions(List.generate(
+        widget.placeholderCount,
+        (_) => const PlaceholderDimensions(
+          size: Size.zero,
+          alignment: PlaceholderAlignment.middle,
+        ),
+      ));
+    }
+    try {
+      painter.layout(maxWidth: widget.maxWidth);
+    } catch (_) {
+      painter.dispose();
+      rethrow;
+    }
+
+    cached?.dispose();
+    _painter = painter;
+    _laidOutText = widget.text;
+    _laidOutWidth = widget.maxWidth;
+    _laidOutPlaceholders = widget.placeholderCount;
+    _laidOutDirection = widget.textDirection;
+    return painter;
+  }
+
+  @override
+  void dispose() {
+    _painter?.dispose();
+    _painter = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    TextPainter? painter;
+    try {
+      painter = _painterFor();
+    } catch (_) {
+      painter = null;
+    }
+    return widget.builder(painter);
   }
 }
 
@@ -658,6 +745,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     _selectionRangeNotifier.value = word;
     _showSelectionBubble(wordText, globalPosition);
+    // Une sélection annonce souvent « Définir » ou « Traduire » : on charge
+    // l'IA locale dès maintenant (sans effet si déjà chargée ou absente),
+    // la réponse arrive ainsi bien plus vite après le tap.
+    unawaited(LocalLlmService.instance.warmUp());
+  }
+
+  /// La phrase du paragraphe sélectionné qui contient la sélection — donnée
+  /// au dictionnaire pour qu'il explique le sens du mot À CET ENDROIT.
+  String? _selectionContextSentence() {
+    final text = _selectionParagraphPlainText;
+    final range = _selectionRangeNotifier.value;
+    if (text == null || range == null || !range.isValid) return null;
+    var start = range.start;
+    while (start > 0 && !'.!?…\n'.contains(text[start - 1])) {
+      start--;
+    }
+    var end = range.end;
+    while (end < text.length && !'.!?…\n'.contains(text[end])) {
+      end++;
+    }
+    if (end < text.length) end++; // garder la ponctuation finale
+    final sentence = text.substring(start, end).trim();
+    return sentence.length > 400 ? sentence.substring(0, 400) : sentence;
   }
 
   void _onSelectionUpdate(
@@ -854,6 +964,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final para = _selectingParagraph;
     final chapterId =
         para == null ? '' : widget.ebook.chapters[para.chapterIndex].id;
+    final contextSentence = _selectionContextSentence();
     _cancelSelection();
     await showModalBottomSheet<void>(
       context: context,
@@ -871,6 +982,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
           ebookId: widget.ebook.id,
           chapterId: chapterId,
+          contextSentence: contextSentence,
         ),
       ),
     );
@@ -1233,13 +1345,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (index < 0 || index >= _sentences.length) return;
     final requestId = ++_translationRequestId;
     try {
-      final translated = await _translationService.translate(
+      // ML Kit (traducteur neuronal sur le téléphone) : instantané, il suit
+      // le rythme de la lecture sans rien coûter.
+      final translated = await _translationService.translateLive(
         text: _sentences[index].text,
         sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
         targetLang: translationLanguageNotifier.value,
       );
       if (!mounted || requestId != _translationRequestId) return;
       setState(() => _currentTranslation = translated);
+      // Phrase suivante traduite d'avance : elle s'affichera sans délai.
+      if (index + 1 < _sentences.length) {
+        unawaited(_translationService
+            .translateLive(
+              text: _sentences[index + 1].text,
+              sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
+              targetLang: translationLanguageNotifier.value,
+            )
+            .then<void>((_) {}, onError: (_) {}));
+      }
     } catch (_) {
       // Bulle laissée telle quelle (garde la dernière traduction valide)
       // plutôt que d'afficher une erreur pour une seule phrase manquée.
@@ -1251,7 +1375,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _translationModeEnabled = enabled;
       if (!_translationModeEnabled) _currentTranslation = null;
     });
-    if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+    if (_translationModeEnabled) {
+      final src = DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName);
+      // Télécharge les modèles ML Kit (une fois) puis traduit la phrase.
+      TranslationService.prepareLive(src, translationLanguageNotifier.value)
+          .then((_) => _loadTranslationForCurrentSentence());
+    }
   }
 
   /// Panneau ouvert en tapant sur l'icône de dictionnaire de l'AppBar : ne
@@ -1979,7 +2108,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
     // API), donc plus besoin du backend ni du Wi-Fi maison — la liste est
     // simplement hardcodée (vérifiée une à une contre le vrai catalogue
     // Google). Les voix locales restent disponibles hors ligne comme avant.
+    // Voix IA locales : uniquement celles dont le modèle est installé sur le
+    // téléphone. Placées en premier pour que cette nouvelle section soit
+    // facile à trouver dans le sélecteur.
+    final aiVoices = await SherpaTtsService.instance.installedVoices();
     final voices = <Voice>[
+      ...aiVoices.map((v) => Voice(
+            name: v.name,
+            displayName: v.displayName,
+            languageCode: v.languageCode,
+          )),
       ...allCloudVoices,
       ...LocalTtsService.availableVoices.map((v) => Voice(
             name: v.name,
@@ -2033,48 +2171,100 @@ class _ReaderScreenState extends State<ReaderScreen> {
     ebookBox.put(widget.ebook.id, widget.ebook);
   }
 
+  // Pas des boutons +/- — plus grossier que celui du slider (0.05) pour
+  // permettre d'atteindre rapidement une vitesse éloignée sans multiplier
+  // les appuis.
+  static const double _speedButtonStep = 0.1;
+
+  // Vitesses courantes proposées en accès rapide, en plus du slider et des
+  // boutons +/- — pour aller directement à une valeur usuelle sans tâtonner.
+  static const List<double> _speedPresets = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+  String _formatSpeed(double speed) =>
+      '${speed % 1 == 0 ? speed.toInt() : speed}x';
+
   void _showSpeedDialog() {
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
+          void changeSpeed(double newSpeed) {
+            final clamped = double.parse(
+              newSpeed.clamp(_speedMin, _speedMax).toStringAsFixed(2),
+            );
+            setDialogState(() => _playbackSpeed = clamped);
+            setState(() {});
+            audioHandler?.updateSpeed(clamped);
+          }
+
           return AlertDialog(
             title: Text(AppLocalizations.of(context)!.reader_readingSpeed),
-            content: Column(
+            content: SingleChildScrollView(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '${_playbackSpeed % 1 == 0 ? _playbackSpeed.toInt() : _playbackSpeed}x',
+                  _formatSpeed(_playbackSpeed),
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                         color: Theme.of(context).colorScheme.primary,
                       ),
                 ),
-                Slider(
-                  value: _playbackSpeed,
-                  min: _speedMin,
-                  max: _speedMax,
-                  divisions: ((_speedMax - _speedMin) / _speedStep).round(),
-                  label: '${_playbackSpeed % 1 == 0 ? _playbackSpeed.toInt() : _playbackSpeed}x',
-                  onChanged: (value) {
-                    final newSpeed = double.parse(value.toStringAsFixed(2));
-                    setDialogState(() => _playbackSpeed = newSpeed);
-                    setState(() {});
-                    audioHandler?.updateSpeed(newSpeed);
-                  },
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline),
+                      tooltip: AppLocalizations.of(context)!.reader_slower,
+                      onPressed: _playbackSpeed <= _speedMin
+                          ? null
+                          : () => changeSpeed(_playbackSpeed - _speedButtonStep),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: _playbackSpeed,
+                        min: _speedMin,
+                        max: _speedMax,
+                        divisions: ((_speedMax - _speedMin) / _speedStep).round(),
+                        label: _formatSpeed(_playbackSpeed),
+                        onChanged: changeSpeed,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      tooltip: AppLocalizations.of(context)!.reader_faster,
+                      onPressed: _playbackSpeed >= _speedMax
+                          ? null
+                          : () => changeSpeed(_playbackSpeed + _speedButtonStep),
+                    ),
+                  ],
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
-                      Text('0.5x', style: TextStyle(color: Colors.grey)),
-                      Text('2x', style: TextStyle(color: Colors.grey)),
+                    children: [
+                      Text(_formatSpeed(_speedMin), style: const TextStyle(color: Colors.grey)),
+                      Text(_formatSpeed(_speedMax), style: const TextStyle(color: Colors.grey)),
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    for (final preset in _speedPresets)
+                      ChoiceChip(
+                        label: Text(_formatSpeed(preset)),
+                        selected: (_playbackSpeed - preset).abs() < 0.001,
+                        onSelected: (_) => changeSpeed(preset),
+                      ),
+                  ],
+                ),
               ],
+            ),
             ),
             actions: [
               TextButton(
@@ -2216,7 +2406,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!families.contains(f)) families.add(f);
     }
     final hasLocalVoices = groups.keys.any((lang) => lang.contains('hors ligne'));
-    final chips = [...families, if (hasLocalVoices) 'Hors ligne'];
+    final hasAiVoices = groups.keys.any((lang) => lang.contains('IA locale'));
+    final chips = [
+      if (hasAiVoices) 'IA locale',
+      ...families,
+      if (hasLocalVoices) 'Hors ligne',
+    ];
 
     final sectionKeys = {for (final lang in groups.keys) lang: GlobalKey()};
     final panelScrollController = ScrollController();
@@ -2277,7 +2472,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         onPressed: () {
                           final targetLang = f == 'Hors ligne'
                               ? groups.keys.firstWhere((lang) => lang.contains('hors ligne'))
-                              : groups.keys.firstWhere((lang) => _languageFamily(lang) == f);
+                              : f == 'IA locale'
+                                  ? groups.keys.firstWhere((lang) => lang.contains('IA locale'))
+                                  : groups.keys.firstWhere((lang) => _languageFamily(lang) == f);
                           final renderObject =
                               sectionKeys[targetLang]?.currentContext?.findRenderObject();
                           // Calcul direct de l'offset cible (au lieu de

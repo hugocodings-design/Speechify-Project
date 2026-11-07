@@ -66,6 +66,18 @@ dependencies:
   google_mlkit_text_recognition: ^0.15.0
   image: ^4.3.0  # 4.4+ exige archive ^4.x, incompatible avec epub_decoder/file_service
 
+  # Import d'articles web (parsing HTML pour extraire le texte principal)
+  html: ^0.15.4
+
+  # Voix IA locales gratuites (synthèse neuronale sur le téléphone, hors ligne,
+  # aucune clé API) — modèles Piper/Kokoro via sherpa-onnx
+  # Reste en 1.x : la 2.0 a retiré la phonémisation espeak-ng intégrée dont
+  # les voix Piper (français) ont besoin.
+  sherpa_onnx: ^1.13.8
+  google_mlkit_translation: ^0.13.1
+  llama_flutter_android:
+    path: packages/llama_flutter_android
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

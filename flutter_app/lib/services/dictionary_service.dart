@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:dio/dio.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../secrets.dart';
+import 'local_llm_service.dart';
 
 /// Catégorie d'erreur réseau — permet à l'UI (dictionary_sheet.dart) d'afficher
 /// un message localisé plutôt que le texte français codé en dur ci-dessous,
@@ -137,6 +138,70 @@ class DictionaryService {
     await cacheBox.put(cacheKey, result.toJson());
     await _purgeOldCacheEntriesIfNeeded(cacheBox);
     return result;
+  }
+
+  /// Version « au fil de l'eau » : avec l'IA locale (Qwen sur le téléphone)
+  /// si elle est installée — chaque élément du flux est la fiche complétée
+  /// au fur et à mesure que le modèle l'écrit, l'interface l'affiche donc
+  /// dès les premiers mots. Sinon, un seul élément venant de Gemini.
+  /// [contextSentence] : la phrase où le mot apparaît, pour expliquer le sens
+  /// qu'il a À CET ENDROIT (l'IA locale en tient compte).
+  Stream<DictionaryLookup> lookupStream({
+    required String word,
+    required String sourceLang,
+    required String targetLang,
+    String? contextSentence,
+  }) async* {
+    final ctx = (contextSentence ?? '').trim();
+    final local = LocalLlmService.instance;
+    if (!await local.isInstalled()) {
+      yield await lookup(word: word, sourceLang: sourceLang, targetLang: targetLang);
+      return;
+    }
+
+    // Clé de cache propre à l'IA locale, liée au contexte : un même mot peut
+    // avoir un autre sens dans une autre phrase.
+    final cacheKey = 'local|$sourceLang|$targetLang|${word.toLowerCase()}|${ctx.hashCode}';
+    final cached = _memoryCache[cacheKey];
+    if (cached != null) {
+      yield cached;
+      return;
+    }
+    final cacheBox = Hive.box(_cacheBoxName);
+    final cachedRaw = cacheBox.get(cacheKey);
+    if (cachedRaw != null) {
+      final l = DictionaryLookup.fromJson(cachedRaw as Map);
+      _memoryCache[cacheKey] = l;
+      yield l;
+      return;
+    }
+
+    DictionaryLookup? last;
+    await for (final d in local.define(
+      word: word,
+      sourceLang: sourceLang,
+      targetLang: targetLang,
+      contextSentence: ctx.isEmpty ? null : ctx,
+    )) {
+      last = DictionaryLookup(
+        word: word,
+        translatedWord: d.translatedWord,
+        partOfSpeech: d.partOfSpeech,
+        definition: d.definition,
+        example: d.example,
+        synonyms: d.synonyms,
+      );
+      if (d.hasContent) yield last;
+      if (d.complete && d.hasContent) {
+        _memoryCache[cacheKey] = last;
+        await cacheBox.put(cacheKey, last.toJson());
+        await _purgeOldCacheEntriesIfNeeded(cacheBox);
+      }
+    }
+    if (last == null || last.definition.isEmpty) {
+      throw DictionaryNetworkException(
+          'Réponse inattendue de l\'IA locale', DictionaryErrorCode.unexpectedResponse);
+    }
   }
 
   Future<DictionaryLookup> _fetchFromGemini({
