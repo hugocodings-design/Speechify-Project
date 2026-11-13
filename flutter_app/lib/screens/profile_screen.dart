@@ -6,6 +6,7 @@ import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
         translationLanguageNotifier, appLocaleNotifier;
 import '../services/stats_service.dart';
+import '../widgets/pc_boost_tile.dart';
 import '../widgets/section_header.dart';
 import '../widgets/stat_tile.dart';
 
@@ -380,6 +381,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
             ),
           ),
         ),
+
+        const Divider(),
+
+        // ── Accélération par l'ordinateur (Speechify Boost) ─────────────
+        SectionHeader(label: l10n.profileScreen_boostSection),
+        const PcBoostTile(),
       ],
     );
   }

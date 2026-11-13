@@ -1388,6 +1388,180 @@ abstract class AppLocalizations {
   /// **'Aucune voix installée pour cette langue'**
   String get reader_noVoiceForLanguage;
 
+  /// No description provided for @profileScreen_boostSection.
+  ///
+  /// In fr, this message translates to:
+  /// **'Accélération par l\'ordinateur'**
+  String get profileScreen_boostSection;
+
+  /// No description provided for @profileScreen_boostOff.
+  ///
+  /// In fr, this message translates to:
+  /// **'Désactivée — tout se fait sur le téléphone'**
+  String get profileScreen_boostOff;
+
+  /// No description provided for @profileScreen_boostSearching.
+  ///
+  /// In fr, this message translates to:
+  /// **'Recherche de l\'ordinateur…'**
+  String get profileScreen_boostSearching;
+
+  /// No description provided for @profileScreen_boostConnected.
+  ///
+  /// In fr, this message translates to:
+  /// **'Connecté à {host} — voix et IA sur l\'ordinateur'**
+  String profileScreen_boostConnected(String host);
+
+  /// No description provided for @profileScreen_boostUnreachable.
+  ///
+  /// In fr, this message translates to:
+  /// **'Ordinateur introuvable — le téléphone prend le relais'**
+  String get profileScreen_boostUnreachable;
+
+  /// No description provided for @profileScreen_boostEnable.
+  ///
+  /// In fr, this message translates to:
+  /// **'Utiliser l\'ordinateur quand il est joignable'**
+  String get profileScreen_boostEnable;
+
+  /// No description provided for @profileScreen_boostHosts.
+  ///
+  /// In fr, this message translates to:
+  /// **'Adresses de l\'ordinateur'**
+  String get profileScreen_boostHosts;
+
+  /// No description provided for @profileScreen_boostHostsHint.
+  ///
+  /// In fr, this message translates to:
+  /// **'Wi-Fi et Tailscale, séparées par des virgules'**
+  String get profileScreen_boostHostsHint;
+
+  /// No description provided for @profileScreen_boostCode.
+  ///
+  /// In fr, this message translates to:
+  /// **'Code d\'appairage (6 chiffres)'**
+  String get profileScreen_boostCode;
+
+  /// No description provided for @profileScreen_boostTest.
+  ///
+  /// In fr, this message translates to:
+  /// **'Tester'**
+  String get profileScreen_boostTest;
+
+  /// No description provided for @reader_pageColor.
+  ///
+  /// In fr, this message translates to:
+  /// **'COULEUR DE PAGE'**
+  String get reader_pageColor;
+
+  /// No description provided for @reader_pageAuto.
+  ///
+  /// In fr, this message translates to:
+  /// **'Auto'**
+  String get reader_pageAuto;
+
+  /// No description provided for @reader_pageWhite.
+  ///
+  /// In fr, this message translates to:
+  /// **'Blanc'**
+  String get reader_pageWhite;
+
+  /// No description provided for @reader_pagePaper.
+  ///
+  /// In fr, this message translates to:
+  /// **'Papier'**
+  String get reader_pagePaper;
+
+  /// No description provided for @reader_pageGreen.
+  ///
+  /// In fr, this message translates to:
+  /// **'Vert'**
+  String get reader_pageGreen;
+
+  /// No description provided for @reader_pageGray.
+  ///
+  /// In fr, this message translates to:
+  /// **'Gris'**
+  String get reader_pageGray;
+
+  /// No description provided for @reader_pageNight.
+  ///
+  /// In fr, this message translates to:
+  /// **'Nuit'**
+  String get reader_pageNight;
+
+  /// No description provided for @reader_warmth.
+  ///
+  /// In fr, this message translates to:
+  /// **'Filtre chaud'**
+  String get reader_warmth;
+
+  /// No description provided for @reader_dim.
+  ///
+  /// In fr, this message translates to:
+  /// **'Assombrir'**
+  String get reader_dim;
+
+  /// No description provided for @reader_voicePitch.
+  ///
+  /// In fr, this message translates to:
+  /// **'Timbre de la voix'**
+  String get reader_voicePitch;
+
+  /// No description provided for @reader_pitchDeeper.
+  ///
+  /// In fr, this message translates to:
+  /// **'Plus grave'**
+  String get reader_pitchDeeper;
+
+  /// No description provided for @reader_pitchLighter.
+  ///
+  /// In fr, this message translates to:
+  /// **'Plus aiguë'**
+  String get reader_pitchLighter;
+
+  /// No description provided for @reader_pitchNormal.
+  ///
+  /// In fr, this message translates to:
+  /// **'Normal'**
+  String get reader_pitchNormal;
+
+  /// No description provided for @reader_bookMode.
+  ///
+  /// In fr, this message translates to:
+  /// **'Mode livre (pages)'**
+  String get reader_bookMode;
+
+  /// No description provided for @reader_scrollMode.
+  ///
+  /// In fr, this message translates to:
+  /// **'Mode défilement'**
+  String get reader_scrollMode;
+
+  /// No description provided for @reader_pageTurn.
+  ///
+  /// In fr, this message translates to:
+  /// **'Animation de page'**
+  String get reader_pageTurn;
+
+  /// No description provided for @reader_pageTurnCurl.
+  ///
+  /// In fr, this message translates to:
+  /// **'Page qui tourne'**
+  String get reader_pageTurnCurl;
+
+  /// No description provided for @reader_pageTurnSlide.
+  ///
+  /// In fr, this message translates to:
+  /// **'Glissement'**
+  String get reader_pageTurnSlide;
+
+  /// No description provided for @reader_pageOf.
+  ///
+  /// In fr, this message translates to:
+  /// **'Page {page} sur {total}'**
+  String reader_pageOf(int page, int total);
+
   /// No description provided for @reader_pause.
   ///
   /// In fr, this message translates to:

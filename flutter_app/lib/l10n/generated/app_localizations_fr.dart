@@ -847,6 +847,101 @@ class AppLocalizationsFr extends AppLocalizations {
       'Aucune voix installée pour cette langue';
 
   @override
+  String get profileScreen_boostSection => 'Accélération par l\'ordinateur';
+
+  @override
+  String get profileScreen_boostOff =>
+      'Désactivée — tout se fait sur le téléphone';
+
+  @override
+  String get profileScreen_boostSearching => 'Recherche de l\'ordinateur…';
+
+  @override
+  String profileScreen_boostConnected(String host) {
+    return 'Connecté à $host — voix et IA sur l\'ordinateur';
+  }
+
+  @override
+  String get profileScreen_boostUnreachable =>
+      'Ordinateur introuvable — le téléphone prend le relais';
+
+  @override
+  String get profileScreen_boostEnable =>
+      'Utiliser l\'ordinateur quand il est joignable';
+
+  @override
+  String get profileScreen_boostHosts => 'Adresses de l\'ordinateur';
+
+  @override
+  String get profileScreen_boostHostsHint =>
+      'Wi-Fi et Tailscale, séparées par des virgules';
+
+  @override
+  String get profileScreen_boostCode => 'Code d\'appairage (6 chiffres)';
+
+  @override
+  String get profileScreen_boostTest => 'Tester';
+
+  @override
+  String get reader_pageColor => 'COULEUR DE PAGE';
+
+  @override
+  String get reader_pageAuto => 'Auto';
+
+  @override
+  String get reader_pageWhite => 'Blanc';
+
+  @override
+  String get reader_pagePaper => 'Papier';
+
+  @override
+  String get reader_pageGreen => 'Vert';
+
+  @override
+  String get reader_pageGray => 'Gris';
+
+  @override
+  String get reader_pageNight => 'Nuit';
+
+  @override
+  String get reader_warmth => 'Filtre chaud';
+
+  @override
+  String get reader_dim => 'Assombrir';
+
+  @override
+  String get reader_voicePitch => 'Timbre de la voix';
+
+  @override
+  String get reader_pitchDeeper => 'Plus grave';
+
+  @override
+  String get reader_pitchLighter => 'Plus aiguë';
+
+  @override
+  String get reader_pitchNormal => 'Normal';
+
+  @override
+  String get reader_bookMode => 'Mode livre (pages)';
+
+  @override
+  String get reader_scrollMode => 'Mode défilement';
+
+  @override
+  String get reader_pageTurn => 'Animation de page';
+
+  @override
+  String get reader_pageTurnCurl => 'Page qui tourne';
+
+  @override
+  String get reader_pageTurnSlide => 'Glissement';
+
+  @override
+  String reader_pageOf(int page, int total) {
+    return 'Page $page sur $total';
+  }
+
+  @override
   String get reader_pause => 'Pause';
 
   @override

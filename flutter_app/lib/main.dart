@@ -14,6 +14,8 @@ import 'models/dictionary_entry.dart';
 import 'models/translation_entry.dart';
 import 'screens/main_screen.dart';
 import 'services/llm_selftest.dart';
+import 'services/pc_boost_service.dart';
+import 'services/reading_theme.dart';
 import 'services/speechify_audio_handler.dart';
 
 // Préférences globales accessibles partout dans l'app
@@ -146,6 +148,16 @@ void main() async {
       settings.get('translationLanguage', defaultValue: 'fr') as String;
   final savedAppLanguage = settings.get('appLanguage') as String?; // absent = système
   appLocaleNotifier.value = savedAppLanguage != null ? Locale(savedAppLanguage) : null;
+  pageThemeNotifier.value = settings.get('pageTheme', defaultValue: 'auto') as String;
+  warmthNotifier.value = (settings.get('warmth', defaultValue: 0.0) as num).toDouble();
+  dimNotifier.value = (settings.get('dim', defaultValue: 0.0) as num).toDouble();
+
+  // Speechify Boost : appairage déposé par adb (développement), puis
+  // recherche de l'ordinateur en arrière-plan.
+  await PcBoostService.instance.importPairingFileIfAny();
+  if (PcBoostService.instance.enabled) {
+    unawaited(PcBoostService.instance.base(force: true));
+  }
 
   runApp(const SpeechifyApp());
 
@@ -279,6 +291,8 @@ class _SpeechifyAppState extends State<SpeechifyApp> {
               // 'fr' — donc explicite ici plutôt que réutilisée telle quelle).
               supportedLocales: const [Locale('fr'), Locale('en')],
               localizationsDelegates: AppLocalizations.localizationsDelegates,
+              // Filtre chaud / assombrissement sur toute l'app.
+              builder: (context, child) => ComfortFilter(child: child!),
               home: const MainScreen(),
             );
           },

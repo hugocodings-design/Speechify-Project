@@ -25,6 +25,9 @@ import '../widgets/voice_avatar.dart';
 import '../widgets/translation_sheet.dart';
 import '../widgets/dictionary_sheet.dart';
 import 'annotations_screen.dart';
+import '../widgets/page_turner.dart';
+import '../services/reading_theme.dart';
+import '../services/speechify_audio_handler.dart' show SpeechifyAudioHandler;
 
 // ─── Modèles internes ────────────────────────────────────────────────────────
 
@@ -53,8 +56,14 @@ class _ParagraphItem extends _BookItem {
   /// stable pour une annotation, contrairement aux index de phrase globaux
   /// qui dépendent de l'ensemble du livre.
   final int paragraphIndexInChapter;
+  /// Mode livre : un paragraphe coupé entre deux pages est affiché en
+  /// morceaux. [charOffset] = position du morceau dans le texte du
+  /// paragraphe entier, pour que les surlignages enregistrés restent
+  /// alignés quel que soit le mode.
+  final int charOffset;
   const _ParagraphItem(
-      this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter);
+      this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter,
+      {this.charOffset = 0});
 }
 
 /// Contenu de la bulle « mot sous le doigt » (voir _showSelectionBubble) :
@@ -612,6 +621,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _autoScrollEnabled = true;  // défilement automatique pendant la lecture
   bool _readerVisible = true;       // afficher/masquer le texte pendant la lecture
 
+  // ── Mode livre (pages à tourner, façon liseuse) ─────────────────────────
+  bool _bookMode = Hive.box('settings').get('bookMode', defaultValue: false) as bool;
+  PageTurnStyle _pageTurnStyle =
+      Hive.box('settings').get('pageTurn', defaultValue: 'curl') == 'slide'
+          ? PageTurnStyle.slide
+          : PageTurnStyle.curl;
+  final GlobalKey<PageTurnerState> _pageTurnerKey = GlobalKey();
+  List<List<_BookItem>> _pages = const [];
+  List<int> _pageOfSentence = const [];
+  String _paginationKey = '';
+  String _paginatingKey = '';
+  int _paginationGen = 0;
+  int _bookPage = 0;
+  /// Phrase à garder à l'écran quand les pages sont recalculées (taille du
+  /// texte, police, rotation) : la première de la page affichée.
+  int _bookAnchorSentence = -1;
+
   // ── Traduction en direct (bulle au-dessus du texte pendant la lecture) ──
   // Volontairement NON persisté (comme _autoScrollEnabled) : se réactive à
   // chaque ouverture du lecteur plutôt que de rester allumé silencieusement
@@ -1056,8 +1082,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ebookId: widget.ebook.id,
       chapterId: chapter.id,
       paragraphIndexInChapter: para.paragraphIndexInChapter,
-      startOffset: start,
-      endOffset: end,
+      startOffset: start + para.charOffset,
+      endOffset: end + para.charOffset,
       selectedText: selectedText,
       createdAt: DateTime.now(),
     );
@@ -1688,6 +1714,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// minime, mais parfois un grand saut brusque (paragraphe long, dialogue
   /// court...) — ce qui donnait un défilement saccadé et étourdissant.
   Future<void> _autoScrollToCurrentSentence(int globalIndex) async {
+    if (_bookMode) {
+      // La page tourne toute seule quand la voix arrive en bas.
+      await _bookGoToSentence(globalIndex);
+      return;
+    }
     try {
       // L'ancre précise de la phrase (voir _sentenceAnchorKeys) en priorité
       // — sans elle, deux phrases voisines du même paragraphe pointeraient
@@ -1770,7 +1801,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final wordNotifier = audioHandler?.currentWordIndexNotifier;
     final chapterId = widget.ebook.chapters[para.chapterIndex].id;
     final savedRanges = (_savedHighlightsByChapter[chapterId]?[para.paragraphIndexInChapter] ?? const [])
-        .map((a) => TextRange(start: a.startOffset, end: a.endOffset))
+        .map((a) => TextRange(
+            start: (a.startOffset - para.charOffset).clamp(0, 1 << 30),
+            end: a.endOffset - para.charOffset))
+        .where((r) => r.end > 0)
         .toList();
     final isSelectingThis = identical(_selectingParagraph, para);
 
@@ -1939,6 +1973,313 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  // ─── Mode livre ───────────────────────────────────────────────────────────
+
+  Widget _buildChapterHeader(BuildContext context, _ChapterHeader item) {
+    return Padding(
+      key: ValueKey('h_${item.chapterIndex}'),
+      padding: EdgeInsets.only(
+        top: item.chapterIndex == 0 || _bookMode ? 0 : 32,
+        bottom: 12,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (item.chapterIndex > 0 && !_bookMode)
+            Divider(color: Colors.grey[300], height: 1),
+          if (!_bookMode) const SizedBox(height: 12),
+          Text(item.title, style: _chapterTitleStyle(context)),
+        ],
+      ),
+    );
+  }
+
+  TextStyle? _chapterTitleStyle(BuildContext context) =>
+      Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold);
+
+  void _setBookMode(bool on) {
+    Hive.box('settings').put('bookMode', on);
+    setState(() {
+      _bookMode = on;
+      _showReturnButton = false;
+      _bookAnchorSentence = _currentGlobalIndex;
+      _paginationKey = '';
+      _paginatingKey = '';
+    });
+    if (!on) {
+      // Retour au défilement : la liste se recrée à la phrase en cours.
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _scrollToSentence(_currentGlobalIndex, animate: false));
+    }
+  }
+
+  void _setPageTurnStyle(PageTurnStyle style) {
+    Hive.box('settings').put('pageTurn', style == PageTurnStyle.slide ? 'slide' : 'curl');
+    setState(() => _pageTurnStyle = style);
+  }
+
+  int? _pageForSentence(int globalIndex) {
+    if (globalIndex < 0 || globalIndex >= _pageOfSentence.length) return null;
+    final p = _pageOfSentence[globalIndex];
+    return p < 0 ? null : p;
+  }
+
+  Future<bool> _bookGoToSentence(int globalIndex, {bool animate = true}) async {
+    final p = _pageForSentence(globalIndex);
+    final turner = _pageTurnerKey.currentState;
+    if (p == null || turner == null) {
+      // Pages pas encore calculées : on s'y placera dès qu'elles le seront.
+      _bookAnchorSentence = globalIndex;
+      return true;
+    }
+    await turner.goTo(p, animate: animate);
+    return true;
+  }
+
+  void _onBookPageChanged(int page) {
+    final first = _firstSentenceOfPage(page);
+    final onCurrent = _pageForSentence(_currentGlobalIndex) == page;
+    setState(() {
+      _bookPage = page;
+      if (first != null) _bookAnchorSentence = first;
+      _showReturnButton = !onCurrent;
+    });
+  }
+
+  int? _firstSentenceOfPage(int page) {
+    if (page < 0 || page >= _pages.length) return null;
+    for (final item in _pages[page]) {
+      if (item is _ParagraphItem) return item.sentenceIndices.first;
+    }
+    return null;
+  }
+
+  /// Découpe le livre en pages qui tiennent exactement à l'écran, avec la
+  /// même police, taille et interligne que l'affichage. Un paragraphe trop
+  /// long continue sur la page suivante (coupé entre deux phrases) ; chaque
+  /// chapitre commence sur une nouvelle page. Fait par petits lots pour ne
+  /// jamais figer l'écran sur un long livre.
+  Future<void> _paginate(String key, Size area, double fontSize, String? fontFamily,
+      TextScaler scaler, TextStyle? titleStyle) async {
+    final gen = ++_paginationGen;
+    _paginatingKey = key;
+    final width = area.width - 32;
+    final lineH = scaler.scale(fontSize) * 1.6;
+    // Une ligne de marge : la phrase lue passe en gras et peut s'allonger.
+    final height = area.height - 16 - lineH;
+    final style = TextStyle(fontFamily: fontFamily, fontSize: fontSize, height: 1.6);
+    const paraGap = 10.0;
+
+    final pages = <List<_BookItem>>[];
+    final pageOf = List<int>.filled(_sentences.length, -1);
+    var page = <_BookItem>[];
+    var used = 0.0;
+
+    void closePage() {
+      if (page.isEmpty) return;
+      pages.add(page);
+      page = <_BookItem>[];
+      used = 0;
+    }
+
+    void addItem(_BookItem item, double h) {
+      page.add(item);
+      used += h;
+      if (item is _ParagraphItem) {
+        for (final i in item.sentenceIndices) {
+          pageOf[i] = pages.length;
+        }
+      }
+    }
+
+    double measureTitle(String t) {
+      final tp = TextPainter(
+        text: TextSpan(text: t, style: titleStyle),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout(maxWidth: width);
+      final h = tp.height + 12;
+      tp.dispose();
+      return h;
+    }
+
+    var processed = 0;
+    for (final item in _displayItems) {
+      if (++processed % 120 == 0) {
+        await Future<void>.delayed(Duration.zero);
+        if (gen != _paginationGen || !mounted) return;
+      }
+      if (item is _ChapterHeader) {
+        closePage();
+        addItem(item, measureTitle(item.title));
+        continue;
+      }
+      final para = item as _ParagraphItem;
+      var remaining = List<int>.of(para.sentenceIndices);
+      var charOffset = 0;
+      while (remaining.isNotEmpty) {
+        // Texte tel qu'affiché : chaque phrase suivie d'une espace (les
+        // ancres invisibles devant chaque phrase n'ont pas de largeur).
+        final buf = StringBuffer();
+        final ends = <int>[];
+        for (final idx in remaining) {
+          buf.write(_sentences[idx].text);
+          ends.add(buf.length);
+          buf.write(' ');
+        }
+        final tp = TextPainter(
+          text: TextSpan(text: buf.toString(), style: style),
+          textDirection: TextDirection.ltr,
+          textScaler: scaler,
+        )..layout(maxWidth: width);
+        final free = height - used;
+        if (tp.height + paraGap <= free) {
+          addItem(
+              remaining.length == para.sentenceIndices.length
+                  ? para
+                  : _ParagraphItem(remaining, para.chapterIndex,
+                      para.paragraphIndexInChapter, charOffset: charOffset),
+              tp.height + paraGap);
+          tp.dispose();
+          break;
+        }
+        // Combien de phrases entières tiennent dans la place restante ?
+        var fit = 0;
+        for (var k = 0; k < ends.length; k++) {
+          final boxes = tp.getBoxesForSelection(
+              TextSelection(baseOffset: ends[k] - 1, extentOffset: ends[k]));
+          final bottom = boxes.isEmpty ? double.infinity : boxes.last.bottom;
+          if (bottom + paraGap <= free) {
+            fit = k + 1;
+          } else {
+            break;
+          }
+        }
+        tp.dispose();
+        if (fit == 0) {
+          if (page.isNotEmpty) {
+            closePage();
+            continue; // réessayer sur une page vide
+          }
+          fit = 1; // phrase plus haute qu'une page entière : tant pis
+        }
+        final part = remaining.sublist(0, fit);
+        addItem(
+            _ParagraphItem(part, para.chapterIndex, para.paragraphIndexInChapter,
+                charOffset: charOffset),
+            height); // page pleine
+        for (final idx in part) {
+          charOffset += 1 + _sentences[idx].text.length + 1;
+        }
+        remaining = remaining.sublist(fit);
+        closePage();
+      }
+    }
+    closePage();
+    if (gen != _paginationGen || !mounted) return;
+    setState(() {
+      _pages = pages;
+      _pageOfSentence = pageOf;
+      _paginationKey = key;
+      final anchor = _bookAnchorSentence >= 0 ? _bookAnchorSentence : _currentGlobalIndex;
+      _bookPage = (_pageForSentence(anchor) ?? 0).clamp(0, pages.isEmpty ? 0 : pages.length - 1);
+      _showReturnButton = false;
+    });
+  }
+
+  Widget _buildBookView(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: fontSizeNotifier,
+      builder: (context, fontSize, _) => ValueListenableBuilder<String?>(
+        valueListenable: fontFamilyNotifier,
+        builder: (context, fontFamily, _) => LayoutBuilder(builder: (context, c) {
+          const footer = 28.0;
+          final area = Size(c.maxWidth, c.maxHeight - footer);
+          final scaler = MediaQuery.textScalerOf(context);
+          final key =
+              '${area.width.round()}x${area.height.round()}|$fontSize|$fontFamily|${scaler.scale(10)}';
+          if (key != _paginationKey) {
+            if (key != _paginatingKey) {
+              _paginatingKey = key;
+              final titleStyle = _chapterTitleStyle(context);
+              WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _paginate(key, area, fontSize, fontFamily, scaler, titleStyle));
+            }
+            return const Center(child: CircularProgressIndicator());
+          }
+          final scheme = Theme.of(context).colorScheme;
+          final grey = Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: scheme.onSurface.withValues(alpha: 0.5));
+          return Stack(children: [
+            Positioned.fill(
+              child: Column(children: [
+                Expanded(
+                  child: PageTurner(
+                    key: _pageTurnerKey,
+                    itemCount: _pages.length,
+                    initialIndex: _bookPage,
+                    style: _pageTurnStyle,
+                    pageColor: Theme.of(context).scaffoldBackgroundColor,
+                    onPageChanged: _onBookPageChanged,
+                    itemBuilder: (context, i) => Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final item in _pages[i])
+                              if (item is _ChapterHeader)
+                                _buildChapterHeader(context, item)
+                              else
+                                _buildParagraphWidget(item as _ParagraphItem, null, context),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: footer,
+                  child: Center(
+                    child: Text(
+                        AppLocalizations.of(context)!
+                            .reader_pageOf(_bookPage + 1, _pages.length),
+                        style: grey),
+                  ),
+                ),
+              ]),
+            ),
+            // Toucher le bord droit / gauche : page suivante / précédente.
+            // Un appui long y sélectionne toujours le texte normalement.
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: footer,
+              width: c.maxWidth * 0.22,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _pageTurnerKey.currentState?.previous(),
+              ),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: footer,
+              width: c.maxWidth * 0.22,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _pageTurnerKey.currentState?.next(),
+              ),
+            ),
+          ]);
+        }),
+      ),
+    );
+  }
+
   // ─── Construction de la liste ─────────────────────────────────────────────
 
   void _buildFlatList() {
@@ -2078,6 +2419,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// de lecture, où voir le défilement aide à se repérer).
   Future<bool> _scrollToSentence(int globalIndex, {bool animate = true}) async {
     if (globalIndex < 0 || globalIndex >= _sentences.length) return false;
+    if (_bookMode) return _bookGoToSentence(globalIndex, animate: animate);
     if (!_itemScrollController.isAttached) return false;
     bool success = false;
 
@@ -2149,6 +2491,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // items RÉELLEMENT visibles (fournis par le package) plutôt que sur une
   // estimation de position — fiable même très loin dans un livre long.
   bool get _isCurrentAbove {
+    if (_bookMode) {
+      final p = _pageForSentence(_currentGlobalIndex);
+      return p != null && p < _bookPage;
+    }
     final di = _findDisplayIndex(_currentGlobalIndex);
     if (di < 0) return false;
     final positions = _itemPositionsListener.itemPositions.value;
@@ -2534,6 +2880,58 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// précise (avec région : US, UK, Canada...) sous un titre, avec des
   /// boutons de raccourci par famille de langue en haut. N'interrompt pas
   /// la lecture (showModalBottomSheet ne touche pas à audioHandler).
+  /// Timbre (plus grave ↔ plus aigu) de la voix actuelle, mémorisé pour
+  /// chaque voix et appliqué tout de suite, même en pleine phrase.
+  Widget _buildPitchSlider(BuildContext context, VoidCallback refresh) {
+    final l10n = AppLocalizations.of(context)!;
+    final voice = audioHandler?.voiceName ?? widget.ebook.selectedVoiceName;
+    final pitch = SpeechifyAudioHandler.pitchFor(voice);
+    final name = characterForVoice(voice).name;
+    final grey = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.graphic_eq_rounded, size: 18, color: Colors.grey),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('${l10n.reader_voicePitch} — $name',
+                  style: Theme.of(context).textTheme.labelLarge,
+                  overflow: TextOverflow.ellipsis),
+            ),
+            if ((pitch - 1.0).abs() > 0.005)
+              TextButton(
+                onPressed: () async {
+                  await audioHandler?.setVoicePitch(voice, 1.0);
+                  refresh();
+                },
+                child: Text(l10n.reader_pitchNormal),
+              ),
+          ],
+        ),
+        Row(
+          children: [
+            Text(l10n.reader_pitchDeeper, style: grey),
+            Expanded(
+              child: Slider(
+                value: pitch,
+                min: SpeechifyAudioHandler.pitchMin,
+                max: SpeechifyAudioHandler.pitchMax,
+                divisions: 12,
+                onChanged: (v) async {
+                  await audioHandler?.setVoicePitch(voice, v);
+                  refresh();
+                },
+              ),
+            ),
+            Text(l10n.reader_pitchLighter, style: grey),
+          ],
+        ),
+      ],
+    );
+  }
+
   void _showVoicePicker() {
     // Groupe les voix par langue précise, en conservant l'ordre d'origine.
     final groups = <String, List<Voice>>{};
@@ -2603,7 +3001,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       .titleLarge
                       ?.copyWith(fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                _buildPitchSlider(context, () => setModalState(() {})),
+                const SizedBox(height: 8),
                 // Raccourcis par famille de langue (+ "Hors ligne")
                 SizedBox(
                   height: 36,
@@ -2817,7 +3217,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ];
           // Padding pour la barre Samsung
           final bottomPad = MediaQuery.of(context).padding.bottom + 24;
-          return Padding(
+          // Défilable : avec la couleur de page et le mode livre, le panneau
+          // peut dépasser la hauteur de l'écran (petit écran, grand texte).
+          return SingleChildScrollView(
+            child: Padding(
             padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2877,7 +3280,58 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
+
+                // ── Couleur de page, filtre chaud, assombrissement ────────
+                Text(l10n.reader_pageColor, style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
+                const SizedBox(height: 10),
+                ValueListenableBuilder<String>(
+                  valueListenable: pageThemeNotifier,
+                  builder: (context, current, _) => _pageColorPicker(context, current, (id) {
+                    pageThemeNotifier.value = id;
+                    settings.put('pageTheme', id);
+                    setModalState(() {});
+                  }),
+                ),
+                const SizedBox(height: 16),
+                _comfortSlider(context, Icons.wb_twilight_rounded, l10n.reader_warmth,
+                    warmthNotifier, 'warmth'),
+                _comfortSlider(context, Icons.brightness_low_rounded, l10n.reader_dim,
+                    dimNotifier, 'dim'),
+                const SizedBox(height: 16),
+
+                // ── Mode livre et animation de page ───────────────────────
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.auto_stories_rounded),
+                  title: Text(l10n.reader_bookMode),
+                  value: _bookMode,
+                  onChanged: (v) {
+                    _setBookMode(v);
+                    setModalState(() {});
+                  },
+                ),
+                if (_bookMode) ...[
+                  Text(l10n.reader_pageTurn, style: const TextStyle(fontSize: 13)),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<PageTurnStyle>(
+                      segments: [
+                        ButtonSegment(value: PageTurnStyle.curl, label: Text(l10n.reader_pageTurnCurl)),
+                        ButtonSegment(value: PageTurnStyle.slide, label: Text(l10n.reader_pageTurnSlide)),
+                      ],
+                      selected: {_pageTurnStyle},
+                      showSelectedIcon: false,
+                      onSelectionChanged: (sel) {
+                        _setPageTurnStyle(sel.first);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
 
                 // ── Taille du texte ───────────────────────────────────────
                 Text(l10n.reader_textSizeSection, style: Theme.of(context).textTheme.labelSmall
@@ -2990,8 +3444,86 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 ),
               ],
             ),
+          ),
           );
         },
+      ),
+    );
+  }
+
+  /// Pastilles de couleur de page (Auto, Blanc, Papier, Vert, Gris, Nuit).
+  Widget _pageColorPicker(BuildContext context, String current, ValueChanged<String> onPick) {
+    final l10n = AppLocalizations.of(context)!;
+    final labels = {
+      'auto': l10n.reader_pageAuto,
+      'white': l10n.reader_pageWhite,
+      'paper': l10n.reader_pagePaper,
+      'green': l10n.reader_pageGreen,
+      'gray': l10n.reader_pageGray,
+      'night': l10n.reader_pageNight,
+    };
+    final scheme = Theme.of(context).colorScheme;
+    Widget swatch(String id, Color bg, Color fg) {
+      final selected = id == current;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => onPick(id),
+          child: Column(
+            children: [
+              Container(
+                height: 44,
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: bg,
+                  gradient: id == 'auto'
+                      ? const LinearGradient(
+                          colors: [Colors.white, Colors.white, Colors.black, Colors.black],
+                          stops: [0, 0.5, 0.5, 1],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight)
+                      : null,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: selected ? scheme.primary : Colors.grey.withValues(alpha: 0.4),
+                    width: selected ? 2.5 : 1,
+                  ),
+                ),
+                child: id == 'auto'
+                    ? null
+                    : Text('Aa', style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 4),
+              Text(labels[id]!, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(children: [
+      swatch('auto', Colors.white, Colors.black),
+      for (final t in pageThemes) swatch(t.id, t.background, t.text),
+    ]);
+  }
+
+  Widget _comfortSlider(BuildContext context, IconData icon, String label,
+      ValueNotifier<double> notifier, String key) {
+    return ValueListenableBuilder<double>(
+      valueListenable: notifier,
+      builder: (context, v, _) => Row(
+        children: [
+          Icon(icon, size: 20, color: Colors.grey),
+          const SizedBox(width: 8),
+          SizedBox(width: 92, child: Text(label, style: const TextStyle(fontSize: 13))),
+          Expanded(
+            child: Slider(
+              value: v,
+              onChanged: (x) => notifier.value = x,
+              onChangeEnd: (x) => Hive.box('settings').put(key, x),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -3276,6 +3808,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Couleur de page (Papier, Nuit…) : tout le lecteur — texte, barres,
+    // lecteur audio — prend les couleurs de la page choisie.
+    return ValueListenableBuilder<String>(
+      valueListenable: pageThemeNotifier,
+      builder: (context, pageTheme, _) => Theme(
+        data: readerThemeData(Theme.of(context), pageTheme),
+        child: Builder(builder: _buildReader),
+      ),
+    );
+  }
+
+  Widget _buildReader(BuildContext context) {
     final l10n = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: _readerVisible
@@ -3315,6 +3859,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   setState(() => _readerVisible = !_readerVisible);
                 case 'autoscroll':
                   setState(() => _autoScrollEnabled = !_autoScrollEnabled);
+                case 'bookmode':
+                  _setBookMode(!_bookMode);
                 case 'annotations':
                   Navigator.push(
                     context,
@@ -3369,6 +3915,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 ),
               ),
               PopupMenuItem(
+                value: 'bookmode',
+                child: ListTile(
+                  leading: Icon(_bookMode
+                      ? Icons.view_day_rounded
+                      : Icons.auto_stories_rounded),
+                  title: Text(_bookMode ? l10n.reader_scrollMode : l10n.reader_bookMode),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
                 value: 'autoscroll',
                 child: ListTile(
                   leading: Icon(_autoScrollEnabled
@@ -3401,6 +3957,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           Expanded(
             child: Stack(
               children: [
+                if (_bookMode) _buildBookView(context) else
                 ValueListenableBuilder<double>(
                   valueListenable: fontSizeNotifier,
                   builder: (context, fontSize, _) => ValueListenableBuilder<String?>(
@@ -3433,28 +3990,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     final item = _displayItems[index];
 
                     if (item is _ChapterHeader) {
-                      return Padding(
-                        key: ValueKey('h_${item.chapterIndex}'),
-                        padding: EdgeInsets.only(
-                          top: item.chapterIndex == 0 ? 0 : 32,
-                          bottom: 12,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (item.chapterIndex > 0)
-                              Divider(color: Colors.grey[300], height: 1),
-                            const SizedBox(height: 12),
-                            Text(
-                              item.title,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      );
+                      return _buildChapterHeader(context, item);
                     }
 
                     final para = item as _ParagraphItem;

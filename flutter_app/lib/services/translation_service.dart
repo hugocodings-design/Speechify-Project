@@ -34,7 +34,7 @@ class TranslationService {
       return;
     }
     final local = LocalLlmService.instance;
-    if (!await local.isInstalled()) {
+    if (!await local.isAvailable()) {
       yield await translateLive(text: text, sourceLang: sourceLang, targetLang: targetLang);
       return;
     }

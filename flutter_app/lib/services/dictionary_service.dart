@@ -97,7 +97,7 @@ class DictionaryService {
   }) async* {
     final ctx = (contextSentence ?? '').trim();
     final local = LocalLlmService.instance;
-    if (!await local.isInstalled()) {
+    if (!await local.isAvailable()) {
       throw DictionaryNetworkException(
           'IA locale non installée', DictionaryErrorCode.localModelMissing);
     }

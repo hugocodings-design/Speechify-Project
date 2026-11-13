@@ -840,6 +840,100 @@ class AppLocalizationsEn extends AppLocalizations {
       'No voice installed for this language';
 
   @override
+  String get profileScreen_boostSection => 'Computer acceleration';
+
+  @override
+  String get profileScreen_boostOff => 'Off — everything runs on the phone';
+
+  @override
+  String get profileScreen_boostSearching => 'Looking for the computer…';
+
+  @override
+  String profileScreen_boostConnected(String host) {
+    return 'Connected to $host — voices and AI on the computer';
+  }
+
+  @override
+  String get profileScreen_boostUnreachable =>
+      'Computer not found — the phone takes over';
+
+  @override
+  String get profileScreen_boostEnable =>
+      'Use the computer when it\'s reachable';
+
+  @override
+  String get profileScreen_boostHosts => 'Computer addresses';
+
+  @override
+  String get profileScreen_boostHostsHint =>
+      'Wi-Fi and Tailscale, comma-separated';
+
+  @override
+  String get profileScreen_boostCode => 'Pairing code (6 digits)';
+
+  @override
+  String get profileScreen_boostTest => 'Test';
+
+  @override
+  String get reader_pageColor => 'PAGE COLOR';
+
+  @override
+  String get reader_pageAuto => 'Auto';
+
+  @override
+  String get reader_pageWhite => 'White';
+
+  @override
+  String get reader_pagePaper => 'Paper';
+
+  @override
+  String get reader_pageGreen => 'Green';
+
+  @override
+  String get reader_pageGray => 'Gray';
+
+  @override
+  String get reader_pageNight => 'Night';
+
+  @override
+  String get reader_warmth => 'Warm filter';
+
+  @override
+  String get reader_dim => 'Dim';
+
+  @override
+  String get reader_voicePitch => 'Voice tone';
+
+  @override
+  String get reader_pitchDeeper => 'Deeper';
+
+  @override
+  String get reader_pitchLighter => 'Lighter';
+
+  @override
+  String get reader_pitchNormal => 'Normal';
+
+  @override
+  String get reader_bookMode => 'Book mode (pages)';
+
+  @override
+  String get reader_scrollMode => 'Scroll mode';
+
+  @override
+  String get reader_pageTurn => 'Page animation';
+
+  @override
+  String get reader_pageTurnCurl => 'Page turn';
+
+  @override
+  String get reader_pageTurnSlide => 'Slide';
+
+  @override
+  String reader_pageOf(int page, int total) {
+    return 'Page $page of $total';
+  }
+
+  @override
   String get reader_pause => 'Pause';
 
   @override

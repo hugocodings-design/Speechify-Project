@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:audio_service/audio_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/widgets.dart' show Locale;
@@ -244,9 +245,36 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
   /// laquelle son audio a été synthétisé (normalement 1,0 : aucun effet).
   void _applyPlayerSpeeds() {
     final c = _currentClip;
-    if (c != null) unawaited(_currentPlayer.setSpeed(_speed / c.speed));
+    if (c != null) unawaited(_tune(_currentPlayer, c));
     final b = _bufferClip;
-    if (b != null) unawaited(_bufferPlayer.setSpeed(_speed / b.speed));
+    if (b != null) unawaited(_tune(_bufferPlayer, b));
+  }
+
+  // ─── Timbre (plus grave / plus aigu), réglé pour chaque voix ─────────────
+
+  /// Bornes du réglage : au-delà, la voix devient caricaturale.
+  static const double pitchMin = 0.85, pitchMax = 1.15;
+
+  static double pitchFor(String voice) =>
+      (Hive.box('settings').get('pitch_$voice', defaultValue: 1.0) as num)
+          .toDouble()
+          .clamp(pitchMin, pitchMax);
+
+  /// Timbre de la voix qui parle en ce moment (celle de la traduction quand
+  /// on lit la traduction à voix haute).
+  double get _activePitch => pitchFor(_translationVoice ?? _voiceName);
+
+  /// Change le timbre de [voice] : appliqué tout de suite, même en pleine
+  /// phrase — rien à re-synthétiser, c'est le lecteur qui transforme l'audio.
+  Future<void> setVoicePitch(String voice, double pitch) async {
+    await Hive.box('settings').put('pitch_$voice', pitch.clamp(pitchMin, pitchMax));
+    _applyPlayerSpeeds();
+  }
+
+  /// Vitesse et timbre d'un lecteur pour [clip].
+  Future<void> _tune(AudioPlayer player, TtsClip clip) async {
+    await player.setSpeed(_speed / clip.speed);
+    await player.setPitch(_activePitch);
   }
 
   void _invalidatePipeline() {
@@ -377,7 +405,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
       }
       _currentLoadedIndex = index;
       _currentClip = clip;
-      await _currentPlayer.setSpeed(_speed / clip.speed);
+      await _tune(_currentPlayer, clip);
       if (myToken != _playToken) return;
 
       final spokenText = _spoken[index] ?? _sentenceTexts[index];
@@ -419,7 +447,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
       _bufferIndex = null;
       _bufferClip = null;
       await _bufferPlayer.setAudioSource(AudioSource.uri(Uri.file(clip.path)));
-      await _bufferPlayer.setSpeed(_speed / clip.speed);
+      await _tune(_bufferPlayer, clip);
       if (token != _playToken || _currentIndex + 1 != next) return;
       _bufferIndex = next;
       _bufferClip = clip;

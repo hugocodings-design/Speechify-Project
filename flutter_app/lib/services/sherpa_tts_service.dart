@@ -6,6 +6,7 @@ import 'dart:typed_data';
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa;
 
+import 'pc_boost_service.dart';
 import 'word_aligner.dart';
 
 enum SherpaModelKind { piper, kokoro }
@@ -358,6 +359,24 @@ class SherpaTtsService {
       throw Exception('Voix IA locale inconnue : $voiceName');
     }
     final spec = modelById(voice.modelId);
+
+    // Ordinateur joignable (Speechify Boost) : synthèse sur sa carte
+    // graphique, ~13× temps réel au lieu de ~2×. Sinon, sur le téléphone.
+    final remote = await PcBoostService.instance.synthesize(
+      voiceSpec: {
+        'folder': spec.folder,
+        'kind': spec.kind.name,
+        'modelFile': spec.modelFile,
+        'sid': voice.sid,
+        'lang': voice.lang,
+        'gb': voice.britishLexicon,
+      },
+      text: text,
+      speed: speed,
+      outPath: outPath,
+    );
+    if (remote != null) return SherpaSynthesis(remote.$1, remote.$2);
+
     final dir = await _modelDir(spec);
     if (!await File('$dir/${spec.modelFile}').exists()) {
       throw Exception('Modèle ${spec.label} non installé sur ce téléphone');

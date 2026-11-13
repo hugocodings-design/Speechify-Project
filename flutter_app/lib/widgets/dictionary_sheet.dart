@@ -172,7 +172,7 @@ class _DictionarySheetState extends State<DictionarySheet> {
   Future<void> _loadContextMeaning() async {
     final sentence = (widget.contextSentence ?? '').trim();
     final llm = LocalLlmService.instance;
-    if (!await llm.isInstalled()) return;
+    if (!await llm.isAvailable()) return;
     final key = '${widget.sourceLang}|$_targetLang|${widget.word.toLowerCase()}|$sentence';
     final cached = _contextCache[key];
     if (cached != null) {

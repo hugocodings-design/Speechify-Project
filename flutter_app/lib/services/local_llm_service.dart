@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:llama_flutter_android/llama_flutter_android.dart';
 import 'package:path_provider/path_provider.dart';
 
+import 'pc_boost_service.dart';
+
 /// IA locale (Qwen 3 4B Instruct, via llama.cpp) pour le dictionnaire et la
 /// traduction d'un passage : tout se passe sur le téléphone, sans réseau ni
 /// clé API.
@@ -65,6 +67,11 @@ class LocalLlmService {
 
   Future<bool> isInstalled() async => (await modelFile()).exists();
 
+  /// L'IA est utilisable : sur l'ordinateur (Speechify Boost) ou sur le
+  /// téléphone.
+  Future<bool> isAvailable() async =>
+      await PcBoostService.instance.llmAvailable() || await isInstalled();
+
   Future<void> _ensureLoaded() {
     if (_loaded) return Future.value();
     return _loading ??= () async {
@@ -101,6 +108,9 @@ class LocalLlmService {
     if (_warmed || _warming) return;
     final active = _activeDone;
     if (active != null && !active.isCompleted) return;
+    // L'ordinateur s'en charge : inutile d'occuper ~3 Go de mémoire sur le
+    // téléphone.
+    if (await PcBoostService.instance.llmAvailable()) return;
     if (!await isInstalled()) return;
     _warming = true;
     try {
@@ -188,6 +198,28 @@ class LocalLlmService {
       await previous.future.timeout(const Duration(seconds: 5), onTimeout: () {});
     }
     if (serial != _requestSerial) return; // déjà remplacée par une plus récente
+
+    // Ordinateur joignable : génération sur sa carte graphique (~10× plus
+    // rapide). En cas de coupure avant le premier mot, on continue sur le
+    // téléphone.
+    final boost = PcBoostService.instance;
+    if (await boost.llmAvailable()) {
+      var yielded = false;
+      try {
+        await for (final piece in boost.generate(
+            prompt: prompt, maxTokens: maxTokens, temperature: temperature)) {
+          if (serial != _requestSerial) return;
+          yielded = true;
+          yield piece;
+        }
+        return;
+      } catch (e) {
+        debugPrint('[LOCAL-LLM] ordinateur indisponible, retour au téléphone : $e');
+        boost.markFailed();
+        if (yielded) return;
+      }
+      if (serial != _requestSerial) return;
+    }
 
     if (pauseAudio) _enterBusy();
     void leave() {
