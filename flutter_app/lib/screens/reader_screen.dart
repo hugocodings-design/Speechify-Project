@@ -3074,7 +3074,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   key: ValueKey('list_${fontSize}_$fontFamily'),
                   itemScrollController: _itemScrollController,
                   itemPositionsListener: _itemPositionsListener,
-                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
+                  // En mode "texte seul" (contrôles masqués via l'œil), on
+                  // laisse plus d'air en haut (pas d'AppBar : zone de
+                  // sécurité + marge) et en bas (au-dessus de la barre de
+                  // progression réduite), pour que le texte ne colle pas
+                  // aux bords de l'écran.
+                  padding: EdgeInsets.fromLTRB(
+                    16,
+                    _readerVisible ? 16 : MediaQuery.of(context).padding.top + 28,
+                    16,
+                    _readerVisible ? 24 : 32,
+                  ),
                   initialScrollIndex: _findDisplayIndex(_currentGlobalIndex).clamp(0, _displayItems.length - 1),
                   itemCount: _displayItems.length,
                   itemBuilder: (context, index) {
@@ -3120,7 +3130,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 // ── Bouton "Retour au texte en cours" ─────────────────────
                 if (_showReturnButton)
                   Positioned(
-                    bottom: 12 + (_readerVisible ? 0 : MediaQuery.of(context).padding.bottom),
+                    // La barre de progression reste toujours affichée en bas
+                    // (voir plus bas), donc le texte est toujours contraint
+                    // au-dessus d'elle : plus besoin de compenser la zone de
+                    // sécurité ici, que les contrôles soient visibles ou non.
+                    bottom: 12,
                     left: 0,
                     right: 0,
                     child: Center(
@@ -3176,7 +3190,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
           ),
 
           // ── Contrôles fixes en bas ───────────────────────────────────────
-          if (_readerVisible) Container(
+          // Toujours affiché, au moins pour la barre de progression + le
+          // chrono : même en mode "texte seul" (œil désactivé), on garde la
+          // progression du livre visible. Seuls les contrôles de lecture
+          // complets (voix, précédent/lecture/suivant, vitesse) se masquent
+          // avec _readerVisible, un peu plus bas.
+          Container(
             padding: EdgeInsets.fromLTRB(16, 10, 16, MediaQuery.of(context).padding.bottom + 14),
             decoration: BoxDecoration(
               color: Theme.of(context).colorScheme.surface,
@@ -3238,7 +3257,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
                   ),
                 ),
-                Row(
+                if (_readerVisible) Row(
                   children: [
                     // Sélecteur de voix : pastille circulaire, en bas à
                     // gauche, qui ouvre un panneau complet (la lecture
