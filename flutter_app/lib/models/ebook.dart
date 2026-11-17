@@ -18,7 +18,7 @@ class Ebook {
   int lastReadPosition = 0;
 
   @HiveField(4)
-  String selectedVoiceName = "en-US-Neural2-D";
+  String selectedVoiceName = "sherpa-kokoro-af_heart";
 
   @HiveField(5)
   final DateTime uploadedAt;
@@ -35,6 +35,9 @@ class Ebook {
   @HiveField(9)
   String? coverImagePath; // chemin local vers l'image de couverture extraite
 
+  @HiveField(10)
+  DateTime? lastOpenedAt; // dernière fois que le livre a été ouvert dans le lecteur
+
   Ebook({
     required this.id,
     required this.title,
@@ -42,14 +45,18 @@ class Ebook {
     required this.uploadedAt,
     required this.fileFormat,
     this.lastReadPosition = 0,
-    this.selectedVoiceName = "en-US-Neural2-D",
+    this.selectedVoiceName = "sherpa-kokoro-af_heart",
     this.folderId,
     this.totalSentences = 0,
     this.coverImagePath,
+    this.lastOpenedAt,
   });
 
   int get totalWords => chapters.fold(0, (sum, ch) => sum + ch.wordCount);
 
   int get totalChunks =>
       chapters.fold(0, (sum, ch) => sum + (ch.textContent.length ~/ 200));
+
+  bool get isFinished =>
+      totalSentences > 0 && lastReadPosition >= totalSentences - 1;
 }

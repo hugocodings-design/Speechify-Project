@@ -49,3 +49,6 @@ app.*.map.json
 
 # Clés API — jamais commitées en clair
 lib/secrets.dart
+
+# Rapport généré par flutter gen-l10n, pas du code
+lib/l10n/untranslated.txt

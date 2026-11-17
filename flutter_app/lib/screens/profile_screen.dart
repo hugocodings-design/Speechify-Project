@@ -1,10 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:intl/intl.dart' as intl;
+import '../l10n/generated/app_localizations.dart';
 import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, readerMarginNotifier,
-        dictionaryLanguageNotifier, translationLanguageNotifier;
+        dictionaryLanguageNotifier, translationLanguageNotifier, appLocaleNotifier;
 import '../services/stats_service.dart';
+import '../widgets/pc_boost_tile.dart';
 import '../widgets/section_header.dart';
+import '../widgets/stat_tile.dart';
 
 class ProfileScreen extends StatefulWidget {
   const ProfileScreen({Key? key}) : super(key: key);
@@ -17,29 +21,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
   // Période sélectionnée : 0=Jour, 1=Semaine, 2=Mois, 3=6 mois, 4=Année
   int _selectedPeriod = 1;
 
-  static const _periodLabels = ['Jour', 'Semaine', 'Mois', '6 mois', 'Année'];
-
-  // ── Paramètres (relocalisés depuis l'ancien settings_screen.dart) ────────
-  late TextEditingController _serverUrlController;
-
-  @override
-  void initState() {
-    super.initState();
-    final settings = Hive.box('settings');
-    _serverUrlController = TextEditingController(
-      text: settings.get('serverUrl', defaultValue: 'http://192.168.0.160:8000') as String,
-    );
-  }
-
-  @override
-  void dispose() {
-    _serverUrlController.dispose();
-    super.dispose();
-  }
-
-  void _saveServerUrl(String value) {
-    Hive.box('settings').put('serverUrl', value.trim());
-  }
+  List<String> _periodLabels(AppLocalizations l10n) => [
+        l10n.profileScreen_periodDay,
+        l10n.profileScreen_periodWeek,
+        l10n.profileScreen_periodMonth,
+        l10n.profileScreen_periodSixMonths,
+        l10n.profileScreen_periodYear,
+      ];
 
   void _setTheme(ThemeMode mode) {
     themeModeNotifier.value = mode;
@@ -76,6 +64,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
     Hive.box('settings').put('translationLanguage', code);
   }
 
+  void _setAppLanguage(String? code) {
+    appLocaleNotifier.value = code != null ? Locale(code) : null;
+    if (code != null) {
+      Hive.box('settings').put('appLanguage', code);
+    } else {
+      Hive.box('settings').delete('appLanguage');
+    }
+  }
+
   DateTimeRange _getRange() {
     final now = DateTime.now();
     final today = DateTime(now.year, now.month, now.day);
@@ -97,9 +94,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Profil'),
+        title: Text(l10n.nav_profile),
         centerTitle: true,
         elevation: 0,
       ),
@@ -132,10 +130,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   height: 40,
                   child: ListView.separated(
                     scrollDirection: Axis.horizontal,
-                    itemCount: _periodLabels.length,
+                    itemCount: _periodLabels(l10n).length,
                     separatorBuilder: (_, __) => const SizedBox(width: 8),
                     itemBuilder: (context, i) => ChoiceChip(
-                      label: Text(_periodLabels[i]),
+                      label: Text(_periodLabels(l10n)[i]),
                       selected: _selectedPeriod == i,
                       onSelected: (_) => setState(() => _selectedPeriod = i),
                     ),
@@ -144,9 +142,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 const SizedBox(height: 24),
 
                 // ── Carte principale : temps de la période ──────────────────
-                _StatCard(
+                StatTile(
                   icon: Icons.timer_outlined,
-                  label: 'Temps de lecture — ${_periodLabels[_selectedPeriod].toLowerCase()}',
+                  label: l10n.profileScreen_readingTimeForPeriod(
+                      _periodLabels(l10n)[_selectedPeriod].toLowerCase()),
                   value: StatsService.formatSeconds(totalSec),
                   highlight: true,
                 ),
@@ -156,17 +155,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 Row(
                   children: [
                     Expanded(
-                      child: _StatCard(
+                      child: StatTile(
                         icon: Icons.bar_chart_rounded,
-                        label: 'Moy. par semaine',
+                        label: l10n.profileScreen_avgPerWeek,
                         value: StatsService.formatSeconds(weekAvgSec),
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
-                      child: _StatCard(
+                      child: StatTile(
                         icon: Icons.auto_stories_outlined,
-                        label: 'Total de lecture',
+                        label: l10n.profileScreen_totalReading,
                         value: StatsService.formatSeconds(allTimeSec),
                       ),
                     ),
@@ -177,7 +176,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 // ── Graphique en barres ─────────────────────────────────────
                 if (chartData.isNotEmpty) ...[
                   Text(
-                    'RÉPARTITION',
+                    l10n.profileScreen_breakdown,
                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                         color: Colors.grey, letterSpacing: 1.2),
                   ),
@@ -195,13 +194,13 @@ class _ProfileScreenState extends State<ProfileScreen> {
                             size: 64, color: Colors.grey[400]),
                         const SizedBox(height: 12),
                         Text(
-                          'Aucune lecture enregistrée',
+                          l10n.profileScreen_noReadingRecorded,
                           style: Theme.of(context).textTheme.bodyMedium
                               ?.copyWith(color: Colors.grey[500]),
                         ),
                         const SizedBox(height: 4),
                         Text(
-                          'Commence à lire pour voir tes statistiques',
+                          l10n.profileScreen_startReadingHint,
                           style: Theme.of(context).textTheme.bodySmall
                               ?.copyWith(color: Colors.grey[400]),
                         ),
@@ -223,32 +222,33 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Widget _buildSettingsSection(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         // ── Apparence ────────────────────────────────────────────────────
-        const SectionHeader(label: 'Apparence'),
+        SectionHeader(label: l10n.profileScreen_appearance),
 
         ValueListenableBuilder<ThemeMode>(
           valueListenable: themeModeNotifier,
           builder: (context, themeMode, _) => Column(
             children: [
               RadioListTile<ThemeMode>(
-                title: const Text('Système'),
+                title: Text(l10n.profileScreen_system),
                 secondary: const Icon(Icons.brightness_auto_rounded),
                 value: ThemeMode.system,
                 groupValue: themeMode,
                 onChanged: (v) => _setTheme(v!),
               ),
               RadioListTile<ThemeMode>(
-                title: const Text('Clair'),
+                title: Text(l10n.profileScreen_light),
                 secondary: const Icon(Icons.light_mode_rounded),
                 value: ThemeMode.light,
                 groupValue: themeMode,
                 onChanged: (v) => _setTheme(v!),
               ),
               RadioListTile<ThemeMode>(
-                title: const Text('Sombre'),
+                title: Text(l10n.profileScreen_dark),
                 secondary: const Icon(Icons.dark_mode_rounded),
                 value: ThemeMode.dark,
                 groupValue: themeMode,
@@ -261,7 +261,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
         const Divider(),
 
         // ── Texte ────────────────────────────────────────────────────────
-        const SectionHeader(label: 'Texte'),
+        SectionHeader(label: l10n.profileScreen_text),
 
         ValueListenableBuilder<double>(
           valueListenable: fontSizeNotifier,
@@ -269,9 +269,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.format_size_rounded),
-                title: const Text('Taille du texte'),
+                title: Text(l10n.profileScreen_textSize),
                 trailing: Text(
-                  '${fontSize.toInt()} pt',
+                  l10n.profileScreen_pt(fontSize.toInt()),
                   style: TextStyle(
                     fontSize: 14,
                     color: Theme.of(context).colorScheme.primary,
@@ -305,15 +305,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
           valueListenable: fontFamilyNotifier,
           builder: (context, fontFamily, _) => ListTile(
             leading: const Icon(Icons.font_download_rounded),
-            title: const Text('Police'),
+            title: Text(l10n.profileScreen_font),
             trailing: DropdownButton<String?>(
               value: fontFamily,
               underline: const SizedBox(),
-              items: const [
-                DropdownMenuItem(value: null, child: Text('Défaut')),
-                DropdownMenuItem(value: 'Georgia', child: Text('Georgia')),
-                DropdownMenuItem(value: 'serif', child: Text('Serif')),
-                DropdownMenuItem(value: 'monospace', child: Text('Monospace')),
+              items: [
+                DropdownMenuItem(value: null, child: Text(l10n.profileScreen_default)),
+                const DropdownMenuItem(value: 'Georgia', child: Text('Georgia')),
+                DropdownMenuItem(value: 'serif', child: Text(l10n.profileScreen_serif)),
+                DropdownMenuItem(value: 'monospace', child: Text(l10n.profileScreen_monospace)),
               ],
               onChanged: _setFontFamily,
             ),
@@ -326,11 +326,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
             children: [
               ListTile(
                 leading: const Icon(Icons.vertical_align_center_rounded),
-                title: const Text('Marge en mode texte seul'),
-                subtitle: const Text(
-                  "Espace au-dessus et au-dessous du texte quand on masque "
-                  "le lecteur (l'œil) pendant la lecture",
-                ),
+                title: Text(l10n.profileScreen_readerMargin),
+                subtitle: Text(l10n.profileScreen_readerMarginHint),
                 trailing: Text(
                   '${margin.toInt()} px',
                   style: TextStyle(
@@ -358,8 +355,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           valueListenable: dictionaryLanguageNotifier,
           builder: (context, dictionaryLanguage, _) => ListTile(
             leading: const Icon(Icons.menu_book_rounded),
-            title: const Text('Langue du dictionnaire'),
-            subtitle: const Text('Langue des définitions pendant la lecture'),
+            title: Text(l10n.profileScreen_dictionaryLanguage),
+            subtitle: Text(l10n.profileScreen_dictionaryLanguageHint),
             trailing: DropdownButton<String>(
               value: dictionaryLanguage,
               underline: const SizedBox(),
@@ -380,8 +377,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
           valueListenable: translationLanguageNotifier,
           builder: (context, translationLanguage, _) => ListTile(
             leading: const Icon(Icons.translate_rounded),
-            title: const Text('Langue de traduction'),
-            subtitle: const Text('Traduction en direct et manuelle pendant la lecture'),
+            title: Text(l10n.profileScreen_translationLanguage),
+            subtitle: Text(l10n.profileScreen_translationLanguageHint),
             trailing: DropdownButton<String>(
               value: translationLanguage,
               underline: const SizedBox(),
@@ -400,95 +397,38 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
         const Divider(),
 
-        // ── Connexion ────────────────────────────────────────────────────
-        const SectionHeader(label: 'Connexion'),
+        // ── Langue de l'application ─────────────────────────────────────
+        SectionHeader(label: l10n.profileScreen_languageSection),
 
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-          child: TextField(
-            controller: _serverUrlController,
-            decoration: InputDecoration(
-              labelText: 'URL du serveur TTS',
-              hintText: 'http://192.168.0.160:8000',
-              prefixIcon: const Icon(Icons.dns_rounded),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(12),
-              ),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.check_rounded),
-                tooltip: 'Enregistrer',
-                onPressed: () {
-                  _saveServerUrl(_serverUrlController.text);
-                  FocusScope.of(context).unfocus();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('URL enregistrée'),
-                      backgroundColor: Colors.green,
-                      duration: Duration(seconds: 2),
-                    ),
-                  );
-                },
-              ),
+        ValueListenableBuilder<Locale?>(
+          valueListenable: appLocaleNotifier,
+          builder: (context, appLocale, _) => ListTile(
+            leading: const Icon(Icons.language_rounded),
+            title: Text(l10n.profileScreen_appLanguageLabel),
+            trailing: DropdownButton<String?>(
+              value: appLocale?.languageCode,
+              underline: const SizedBox(),
+              items: [
+                DropdownMenuItem(value: null, child: Text(l10n.profileScreen_system)),
+                const DropdownMenuItem(value: 'fr', child: Text('Français')),
+                const DropdownMenuItem(value: 'en', child: Text('English')),
+              ],
+              onChanged: _setAppLanguage,
             ),
-            onSubmitted: _saveServerUrl,
-            keyboardType: TextInputType.url,
           ),
         ),
+
+        const Divider(),
+
+        // ── Accélération par l'ordinateur (TalkTome Boost) ─────────────
+        SectionHeader(label: l10n.profileScreen_boostSection),
+        const PcBoostTile(),
       ],
     );
   }
 }
 
 // ─── Widgets internes ─────────────────────────────────────────────────────────
-
-class _StatCard extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final String value;
-  final bool highlight;
-
-  const _StatCard({
-    required this.icon,
-    required this.label,
-    required this.value,
-    this.highlight = false,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final color = Theme.of(context).colorScheme.primary;
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: highlight
-            ? color.withOpacity(0.1)
-            : Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.5),
-        borderRadius: BorderRadius.circular(16),
-        border: highlight ? Border.all(color: color.withOpacity(0.3)) : null,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Icon(icon, color: highlight ? color : Colors.grey[600], size: 22),
-          const SizedBox(height: 8),
-          Text(
-            value,
-            style: Theme.of(context).textTheme.headlineSmall?.copyWith(
-                  fontWeight: FontWeight.bold,
-                  color: highlight ? color : null,
-                ),
-          ),
-          const SizedBox(height: 2),
-          Text(
-            label,
-            style: Theme.of(context).textTheme.bodySmall
-                ?.copyWith(color: Colors.grey[600]),
-          ),
-        ],
-      ),
-    );
-  }
-}
 
 class _BarChart extends StatelessWidget {
   final Map<String, int> data;
@@ -544,7 +484,7 @@ class _BarChart extends StatelessWidget {
                     const SizedBox(height: 6),
                     // Étiquette de date
                     Text(
-                      _shortLabel(entry.key),
+                      _shortLabel(context, entry.key),
                       style: TextStyle(
                         fontSize: 9,
                         color: isToday ? color : Colors.grey[500],
@@ -564,16 +504,16 @@ class _BarChart extends StatelessWidget {
   }
 
   /// Transforme une clé 'YYYY-MM-DD' en étiquette courte
-  String _shortLabel(String key) {
+  String _shortLabel(BuildContext context, String key) {
     final parts = key.split('-');
     if (parts.length < 3) return key;
     final month = int.tryParse(parts[1]) ?? 0;
     final day = int.tryParse(parts[2]) ?? 0;
-    // Pour les périodes longues (mois, 6 mois, année), afficher mois
+    // Pour les périodes longues (mois, 6 mois, année), afficher mois abrégé
+    // dans la langue de l'app (via intl, cohérent avec AppLocalizations).
     if (period >= 3) {
-      const monthNames = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Jun',
-                          'Jul', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc'];
-      return monthNames[(month - 1).clamp(0, 11)];
+      final locale = Localizations.localeOf(context).toString();
+      return intl.DateFormat.MMM(locale).format(DateTime(2000, month.clamp(1, 12)));
     }
     // Pour semaine/mois, afficher jour/mois
     return '$day/${month.toString().padLeft(2, '0')}';

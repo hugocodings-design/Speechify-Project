@@ -4,6 +4,7 @@ import 'package:camera/camera.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
+import '../../l10n/generated/app_localizations.dart';
 import '../../models/scan_page.dart';
 import '../../services/image_processing_service.dart';
 import '../../services/ocr_service.dart';
@@ -65,7 +66,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
     try {
       final cameras = await availableCameras();
       if (cameras.isEmpty) {
-        setState(() => _cameraError = 'Aucune caméra disponible sur cet appareil.');
+        setState(() => _cameraError = AppLocalizations.of(context)!.camera_noCameraAvailable);
         return;
       }
       final back = cameras.firstWhere(
@@ -88,14 +89,16 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       await controller.setFlashMode(FlashMode.off);
       if (mounted) setState(() {});
     } on CameraException catch (e) {
+      if (!mounted) return;
       final denied = e.code == 'CameraAccessDenied' ||
           e.code == 'CameraAccessDeniedWithoutPrompt';
+      final l10n = AppLocalizations.of(context)!;
       setState(() => _cameraError = denied
-          ? "L'accès à la caméra a été refusé. Autorisez-le dans les réglages "
-              "de l'application pour scanner des pages."
-          : 'Caméra indisponible : ${e.description ?? e.code}');
+          ? l10n.camera_accessDenied
+          : l10n.camera_unavailableWithReason(e.description ?? e.code));
     } catch (e) {
-      setState(() => _cameraError = 'Caméra indisponible : $e');
+      if (!mounted) return;
+      setState(() => _cameraError = AppLocalizations.of(context)!.camera_unavailableWithReason('$e'));
     }
   }
 
@@ -120,7 +123,8 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       final shot = await controller.takePicture();
       await _ingest([shot.path]);
     } catch (e) {
-      _toast('Échec de la capture : $e');
+      if (!mounted) return;
+      _toast(AppLocalizations.of(context)!.camera_captureFailed('$e'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -134,7 +138,8 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       if (picked.isEmpty) return;
       await _ingest(picked.map((x) => x.path).toList());
     } catch (e) {
-      _toast('Import impossible : $e');
+      if (!mounted) return;
+      _toast(AppLocalizations.of(context)!.camera_importFailed('$e'));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
@@ -192,20 +197,21 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
       if (mounted) Navigator.pop(context);
       return;
     }
+    final l10n = AppLocalizations.of(context)!;
     final quit = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Abandonner le scan ?'),
-        content: Text('${_pages.length} page(s) scannée(s) seront perdues.'),
+        title: Text(l10n.camera_abandonTitle),
+        content: Text(l10n.camera_abandonBody(_pages.length)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Continuer le scan'),
+            child: Text(l10n.camera_continueScanning),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Abandonner',
-                style: TextStyle(color: Colors.red)),
+            child: Text(l10n.camera_abandon,
+                style: const TextStyle(color: Colors.red)),
           ),
         ],
       ),
@@ -225,6 +231,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (didPop, _) {
@@ -236,8 +243,8 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
           backgroundColor: Colors.black,
           foregroundColor: Colors.white,
           title: Text(_pages.isEmpty
-              ? 'Scanner un livre'
-              : '${_pages.length} page(s) scannée(s)'),
+              ? l10n.camera_scanBook
+              : l10n.camera_pagesScanned(_pages.length)),
           leading: IconButton(
             icon: const Icon(Icons.close),
             onPressed: _confirmQuit,
@@ -245,7 +252,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
           actions: [
             IconButton(
               icon: Icon(_torchOn ? Icons.flash_on : Icons.flash_off),
-              tooltip: 'Torche',
+              tooltip: l10n.camera_torch,
               onPressed: _toggleTorch,
             ),
           ],
@@ -260,15 +267,15 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
                   if (_busy)
                     Container(
                       color: Colors.black54,
-                      child: const Center(
+                      child: Center(
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            CircularProgressIndicator(color: Colors.white),
-                            SizedBox(height: 16),
+                            const CircularProgressIndicator(color: Colors.white),
+                            const SizedBox(height: 16),
                             Text(
-                              'Traitement de la photo…',
-                              style: TextStyle(color: Colors.white),
+                              l10n.camera_processingPhoto,
+                              style: const TextStyle(color: Colors.white),
                             ),
                           ],
                         ),
@@ -286,6 +293,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   }
 
   Widget _buildPreview() {
+    final l10n = AppLocalizations.of(context)!;
     final error = _cameraError;
     if (error != null) {
       return Center(
@@ -305,7 +313,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
               FilledButton.icon(
                 onPressed: _pickFromGallery,
                 icon: const Icon(Icons.photo_library),
-                label: const Text('Importer depuis la galerie'),
+                label: Text(l10n.camera_importFromGallery),
               ),
             ],
           ),
@@ -389,6 +397,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
   }
 
   Widget _buildControls() {
+    final l10n = AppLocalizations.of(context)!;
     return Container(
       color: Colors.black,
       // `SafeArea` seul, sans padding manuel en bas : sur les appareils en
@@ -405,7 +414,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
                 iconSize: 32,
                 color: Colors.white,
                 icon: const Icon(Icons.photo_library),
-                tooltip: 'Galerie',
+                tooltip: l10n.camera_gallery,
                 onPressed: _busy ? null : _pickFromGallery,
               ),
               GestureDetector(
@@ -428,7 +437,7 @@ class _CameraCaptureScreenState extends State<CameraCaptureScreen>
               ),
               TextButton(
                 onPressed: _pages.isEmpty || _busy ? null : _finish,
-                child: const Text('Terminer'),
+                child: Text(l10n.camera_finish),
               ),
             ],
           ),

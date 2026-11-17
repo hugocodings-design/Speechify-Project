@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 
+import '../../l10n/generated/app_localizations.dart';
 import '../../models/scan_page.dart';
 import '../../services/image_processing_service.dart';
 import '../../services/ocr_service.dart';
@@ -71,7 +72,7 @@ class _CropScreenState extends State<CropScreen> {
     if (blocking) {
       setState(() {
         _busy = true;
-        _busyLabel = 'Détection de la zone de texte…';
+        _busyLabel = AppLocalizations.of(context)!.crop_detectingTextArea;
       });
     }
     try {
@@ -84,10 +85,10 @@ class _CropScreenState extends State<CropScreen> {
       if (bounds != null && bounds.width > 0.05 && bounds.height > 0.05) {
         setState(() => _quad = ScanPage.quadFromRect(bounds));
       } else if (!silent) {
-        _toast('Aucun bloc de texte détecté — ajustez les coins à la main.');
+        _toast(AppLocalizations.of(context)!.crop_noTextBlockDetected);
       }
     } catch (e) {
-      if (!silent && mounted) _toast('Détection impossible : $e');
+      if (!silent && mounted) _toast(AppLocalizations.of(context)!.crop_detectionFailed('$e'));
     } finally {
       if (blocking && mounted) setState(() => _busy = false);
     }
@@ -96,7 +97,7 @@ class _CropScreenState extends State<CropScreen> {
   Future<void> _rotate() async {
     setState(() {
       _busy = true;
-      _busyLabel = 'Rotation…';
+      _busyLabel = AppLocalizations.of(context)!.crop_rotating;
     });
     try {
       final rotated =
@@ -117,13 +118,14 @@ class _CropScreenState extends State<CropScreen> {
   }
 
   Future<void> _confirm() async {
+    final l10n = AppLocalizations.of(context)!;
     if (!_isConvex(_quad)) {
-      _toast('Les coins se croisent — remettez-les dans l\'ordre.');
+      _toast(l10n.crop_cornersOverlap);
       return;
     }
     setState(() {
       _busy = true;
-      _busyLabel = 'Redressement et lecture du texte…';
+      _busyLabel = l10n.crop_rectifyingAndReading;
     });
 
     widget.page.quad = List.of(_quad);
@@ -139,7 +141,7 @@ class _CropScreenState extends State<CropScreen> {
       widget.page
         ..rectifiedPath = rectified
         ..recognizedText = text
-        ..error = text.trim().isEmpty ? 'Aucun texte reconnu' : null
+        ..error = text.trim().isEmpty ? l10n.crop_noTextRecognized : null
         ..status = text.trim().isEmpty ? ScanStatus.failed : ScanStatus.done;
 
       if (!mounted) return;
@@ -150,7 +152,7 @@ class _CropScreenState extends State<CropScreen> {
         ..error = '$e';
       if (mounted) {
         setState(() => _busy = false);
-        _toast('Échec du traitement : $e');
+        _toast(l10n.crop_processingFailed('$e'));
       }
     }
   }
@@ -183,17 +185,18 @@ class _CropScreenState extends State<CropScreen> {
   @override
   Widget build(BuildContext context) {
     final imageSize = _imageSize;
+    final l10n = AppLocalizations.of(context)!;
 
     return Scaffold(
       backgroundColor: Colors.black,
       appBar: AppBar(
         backgroundColor: Colors.black,
         foregroundColor: Colors.white,
-        title: const Text('Ajuster la zone de texte'),
+        title: Text(l10n.crop_adjustTextArea),
         actions: [
           IconButton(
             icon: const Icon(Icons.rotate_90_degrees_cw),
-            tooltip: 'Pivoter',
+            tooltip: l10n.crop_rotate,
             onPressed: _busy ? null : _rotate,
           ),
         ],
@@ -334,6 +337,7 @@ class _CropScreenState extends State<CropScreen> {
   }
 
   Widget _buildActions() {
+    final l10n = AppLocalizations.of(context)!;
     return Container(
       color: Colors.black,
       // Idem que l'écran caméra : la barre de navigation système passait
@@ -349,7 +353,7 @@ class _CropScreenState extends State<CropScreen> {
           TextButton.icon(
             onPressed: _busy ? null : () => _autoDetect(),
             icon: const Icon(Icons.auto_fix_high),
-            label: const Text('Auto'),
+            label: Text(l10n.crop_auto),
             style: TextButton.styleFrom(foregroundColor: Colors.white),
           ),
           TextButton.icon(
@@ -357,13 +361,13 @@ class _CropScreenState extends State<CropScreen> {
                 ? null
                 : () => setState(() => _quad = ScanPage.defaultQuad()),
             icon: const Icon(Icons.crop_free),
-            label: const Text('Tout'),
+            label: Text(l10n.crop_all),
             style: TextButton.styleFrom(foregroundColor: Colors.white),
           ),
           FilledButton.icon(
             onPressed: _busy ? null : _confirm,
             icon: const Icon(Icons.check),
-            label: const Text('Valider'),
+            label: Text(l10n.crop_confirm),
           ),
             ],
           ),

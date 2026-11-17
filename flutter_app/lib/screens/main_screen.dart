@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive/hive.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../models/ebook.dart';
 import '../services/file_service.dart';
 import 'home_screen.dart';
@@ -9,6 +10,7 @@ import 'recent_screen.dart';
 import 'profile_screen.dart';
 import 'scan/camera_capture_screen.dart';
 import 'annotations_screen.dart';
+import 'url_import_screen.dart';
 import '../widgets/mini_player.dart';
 
 class MainScreen extends StatefulWidget {
@@ -86,7 +88,7 @@ class _MainScreenState extends State<MainScreen> {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
               SnackBar(
-                content: Text('"${ebook.title}" ajouté'),
+                content: Text(AppLocalizations.of(context)!.mainScreen_bookAdded(ebook.title)),
                 backgroundColor: Colors.green,
               ),
             );
@@ -97,7 +99,7 @@ class _MainScreenState extends State<MainScreen> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Erreur: $e'),
+            content: Text(AppLocalizations.of(context)!.mainScreen_error('$e')),
             backgroundColor: Colors.red,
           ),
         );
@@ -108,6 +110,7 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _showAddOptions() async {
+    final l10n = AppLocalizations.of(context)!;
     await showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
@@ -116,8 +119,8 @@ class _MainScreenState extends State<MainScreen> {
           children: [
             ListTile(
               leading: const Icon(Icons.folder_open),
-              title: const Text('Importer un fichier'),
-              subtitle: const Text('PDF ou EPUB'),
+              title: Text(l10n.mainScreen_importFile),
+              subtitle: Text(l10n.mainScreen_pdfOrEpub),
               onTap: () {
                 Navigator.pop(ctx);
                 _pickAndUploadFile();
@@ -125,15 +128,38 @@ class _MainScreenState extends State<MainScreen> {
             ),
             ListTile(
               leading: const Icon(Icons.document_scanner),
-              title: const Text('Scanner avec la caméra'),
-              subtitle: const Text("Photographier les pages d'un livre papier"),
+              title: Text(l10n.mainScreen_scanWithCamera),
+              subtitle: Text(l10n.mainScreen_scanSubtitle),
               onTap: () {
                 Navigator.pop(ctx);
                 _startScan();
               },
             ),
+            ListTile(
+              leading: const Icon(Icons.link),
+              title: Text(l10n.mainScreen_addFromUrl),
+              subtitle: Text(l10n.mainScreen_addFromUrlSubtitle),
+              onTap: () {
+                Navigator.pop(ctx);
+                _addFromUrl();
+              },
+            ),
           ],
         ),
+      ),
+    );
+  }
+
+  Future<void> _addFromUrl() async {
+    final created = await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(builder: (_) => const UrlImportScreen()),
+    );
+    if (!mounted || created != true) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(AppLocalizations.of(context)!.mainScreen_bookCreatedFromUrl),
+        backgroundColor: Colors.green,
       ),
     );
   }
@@ -145,8 +171,8 @@ class _MainScreenState extends State<MainScreen> {
     );
     if (!mounted || created != true) return;
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text('Livre créé à partir du scan'),
+      SnackBar(
+        content: Text(AppLocalizations.of(context)!.mainScreen_bookCreatedFromScan),
         backgroundColor: Colors.green,
       ),
     );
@@ -156,6 +182,7 @@ class _MainScreenState extends State<MainScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Scaffold(
       body: Column(
         children: [
@@ -194,7 +221,7 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               child: _NavItem(
                 icon: Icons.home_rounded,
-                label: 'Accueil',
+                label: l10n.nav_home,
                 index: 0,
                 currentIndex: _currentIndex,
                 onTap: _onNavTap,
@@ -203,7 +230,7 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               child: _NavItem(
                 icon: Icons.library_books_rounded,
-                label: 'Bibliothèque',
+                label: l10n.nav_library,
                 index: 1,
                 currentIndex: _currentIndex,
                 onTap: _onNavTap,
@@ -218,7 +245,7 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               child: _NavItem(
                 icon: Icons.border_color_rounded,
-                label: 'Annotations',
+                label: l10n.nav_annotations,
                 index: 2,
                 currentIndex: _currentIndex,
                 onTap: _onNavTap,
@@ -227,7 +254,7 @@ class _MainScreenState extends State<MainScreen> {
             Expanded(
               child: _NavItem(
                 icon: Icons.person_rounded,
-                label: 'Profil',
+                label: l10n.nav_profile,
                 index: 3,
                 currentIndex: _currentIndex,
                 onTap: _onNavTap,
@@ -321,7 +348,7 @@ class _AddNavItem extends StatelessWidget {
                 : Icon(Icons.add_circle_outline_rounded, color: color, size: 24),
             const SizedBox(height: 2),
             Text(
-              'Ajouter',
+              AppLocalizations.of(context)!.nav_add,
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,

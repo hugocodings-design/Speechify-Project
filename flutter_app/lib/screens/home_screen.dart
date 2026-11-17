@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../models/ebook.dart';
 import '../models/folder.dart';
 import 'reader_screen.dart';
@@ -76,25 +77,26 @@ class _HomeScreenState extends State<HomeScreen> {
   // ─── Actions sur un livre ────────────────────────────────────────────────────
 
   Future<void> _renameEbook(Ebook ebook) async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController(text: ebook.title);
     final newTitle = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Renommer le livre'),
+        title: Text(l10n.home_renameBookTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Titre'),
+          decoration: InputDecoration(labelText: l10n.home_titleFieldLabel),
           onSubmitted: (v) => Navigator.pop(context, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Renommer'),
+            child: Text(l10n.home_rename),
           ),
         ],
       ),
@@ -108,20 +110,21 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteEbook(Ebook ebook) async {
+    final l10n = AppLocalizations.of(context)!;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Supprimer le livre'),
-        content: Text('Supprimer "${ebook.title}" ?'),
+        title: Text(l10n.home_deleteBookTitle),
+        content: Text(l10n.home_deleteBookConfirm(ebook.title)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Supprimer'),
+            child: Text(l10n.common_delete),
           ),
         ],
       ),
@@ -132,7 +135,7 @@ class _HomeScreenState extends State<HomeScreen> {
       setState(() {});
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('"${ebook.title}" supprimé')),
+          SnackBar(content: Text(l10n.home_bookDeleted(ebook.title))),
         );
       }
     }
@@ -145,21 +148,22 @@ class _HomeScreenState extends State<HomeScreen> {
   // ─── Actions sur la sélection ────────────────────────────────────────────────
 
   Future<void> _deleteSelected() async {
+    final l10n = AppLocalizations.of(context)!;
     final count = _selectedIds.length;
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Supprimer les livres'),
-        content: Text('Supprimer $count livre(s) sélectionné(s) ?'),
+        title: Text(l10n.home_deleteBooksTitle),
+        content: Text(l10n.home_deleteSelectedConfirm(count)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Supprimer'),
+            child: Text(l10n.common_delete),
           ),
         ],
       ),
@@ -182,25 +186,26 @@ class _HomeScreenState extends State<HomeScreen> {
   // ─── Dossiers ────────────────────────────────────────────────────────────────
 
   Future<void> _createFolder() async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController();
     final name = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Nouveau dossier'),
+        title: Text(l10n.home_newFolder),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Nom du dossier'),
+          decoration: InputDecoration(labelText: l10n.home_folderNameLabel),
           onSubmitted: (v) => Navigator.pop(context, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Créer'),
+            child: Text(l10n.home_create),
           ),
         ],
       ),
@@ -218,25 +223,26 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _renameFolder(Folder folder) async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController(text: folder.name);
     final newName = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Renommer le dossier'),
+        title: Text(l10n.home_renameFolderTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(labelText: 'Nom'),
+          decoration: InputDecoration(labelText: l10n.home_nameLabel),
           onSubmitted: (v) => Navigator.pop(context, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('Renommer'),
+            child: Text(l10n.home_rename),
           ),
         ],
       ),
@@ -250,6 +256,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _deleteFolder(Folder folder) async {
+    final l10n = AppLocalizations.of(context)!;
     final bookCount = _ebookBox?.values
             .where((e) => e.folderId == folder.id)
             .length ??
@@ -258,19 +265,19 @@ class _HomeScreenState extends State<HomeScreen> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Supprimer le dossier'),
+        title: Text(l10n.home_deleteFolderTitle),
         content: Text(bookCount > 0
-            ? 'Supprimer "${folder.name}" ? Les $bookCount livre(s) seront déplacés à la racine.'
-            : 'Supprimer le dossier "${folder.name}" ?'),
+            ? l10n.home_deleteFolderWithBooksConfirm(bookCount, folder.name)
+            : l10n.home_deleteFolderEmptyConfirm(folder.name)),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context, false),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(context, true),
             style: TextButton.styleFrom(foregroundColor: Colors.red),
-            child: const Text('Supprimer'),
+            child: Text(l10n.common_delete),
           ),
         ],
       ),
@@ -293,6 +300,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _showMoveToFolderDialog(List<String> ebookIds) async {
+    final l10n = AppLocalizations.of(context)!;
     final folders = _folders;
     String? targetFolderId = _currentFolderId;
 
@@ -300,7 +308,7 @@ class _HomeScreenState extends State<HomeScreen> {
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Déplacer dans un dossier'),
+          title: Text(l10n.home_moveToFolderTitle),
           content: SizedBox(
             width: double.maxFinite,
             child: Column(
@@ -308,7 +316,7 @@ class _HomeScreenState extends State<HomeScreen> {
               children: [
                 // Option racine
                 RadioListTile<String?>(
-                  title: const Text('Aucun dossier (racine)'),
+                  title: Text(l10n.home_noFolderRoot),
                   value: null,
                   groupValue: targetFolderId,
                   onChanged: (v) => setDialogState(() => targetFolderId = v),
@@ -330,7 +338,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     if (mounted) await _showMoveToFolderDialog(ebookIds);
                   },
                   icon: const Icon(Icons.create_new_folder_outlined),
-                  label: const Text('Nouveau dossier'),
+                  label: Text(l10n.home_newFolder),
                 ),
               ],
             ),
@@ -338,11 +346,11 @@ class _HomeScreenState extends State<HomeScreen> {
           actions: [
             TextButton(
               onPressed: () => Navigator.pop(context),
-              child: const Text('Annuler'),
+              child: Text(l10n.common_cancel),
             ),
             TextButton(
               onPressed: () => Navigator.pop(context, targetFolderId ?? '__null__'),
-              child: const Text('Déplacer'),
+              child: Text(l10n.home_move),
             ),
           ],
         ),
@@ -388,6 +396,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   PreferredSizeWidget _buildNormalAppBar() {
+    final l10n = AppLocalizations.of(context)!;
     final currentFolder = _currentFolderId != null
         ? _folderBox?.get(_currentFolderId)
         : null;
@@ -406,7 +415,7 @@ class _HomeScreenState extends State<HomeScreen> {
         if (_currentFolderId == null)
           IconButton(
             icon: const Icon(Icons.create_new_folder_outlined),
-            tooltip: 'Nouveau dossier',
+            tooltip: l10n.home_newFolder,
             onPressed: _createFolder,
           ),
       ],
@@ -414,22 +423,23 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   PreferredSizeWidget _buildSelectionAppBar() {
+    final l10n = AppLocalizations.of(context)!;
     return AppBar(
       leading: IconButton(
         icon: const Icon(Icons.close),
         onPressed: _exitSelectionMode,
       ),
-      title: Text('${_selectedIds.length} sélectionné(s)'),
+      title: Text(l10n.home_selectedCount(_selectedIds.length)),
       elevation: 0,
       actions: [
         IconButton(
           icon: const Icon(Icons.drive_file_move_outline),
-          tooltip: 'Déplacer',
+          tooltip: l10n.home_move,
           onPressed: _moveSelected,
         ),
         IconButton(
           icon: const Icon(Icons.delete_outline, color: Colors.red),
-          tooltip: 'Supprimer',
+          tooltip: l10n.common_delete,
           onPressed: _deleteSelected,
         ),
       ],
@@ -437,6 +447,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildContent(List<Ebook> books, List<Folder> folders, bool isRoot) {
+    final l10n = AppLocalizations.of(context)!;
     return ListView(
       padding: const EdgeInsets.only(bottom: 80),
       children: [
@@ -445,7 +456,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
             child: Text(
-              'Dossiers',
+              l10n.home_folders,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     color: Colors.grey[600],
                   ),
@@ -461,7 +472,7 @@ class _HomeScreenState extends State<HomeScreen> {
             padding: const EdgeInsets.all(32),
             child: Center(
               child: Text(
-                'Aucun livre ici',
+                l10n.home_noBooksHere,
                 style: Theme.of(context)
                     .textTheme
                     .bodyMedium
@@ -473,7 +484,7 @@ class _HomeScreenState extends State<HomeScreen> {
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
             child: Text(
-              'Livres',
+              l10n.home_books,
               style: Theme.of(context).textTheme.labelLarge?.copyWith(
                     color: Colors.grey[600],
                   ),
@@ -486,6 +497,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildFolderTile(Folder folder) {
+    final l10n = AppLocalizations.of(context)!;
     final bookCount = _ebookBox?.values
             .where((e) => e.folderId == folder.id)
             .length ??
@@ -496,7 +508,7 @@ class _HomeScreenState extends State<HomeScreen> {
       child: ListTile(
         leading: const Icon(Icons.folder, color: Colors.amber, size: 32),
         title: Text(folder.name),
-        subtitle: Text('$bookCount livre(s)'),
+        subtitle: Text(l10n.home_booksCount(bookCount)),
         trailing: PopupMenuButton<String>(
           icon: const Icon(Icons.more_vert),
           onSelected: (action) {
@@ -504,19 +516,19 @@ class _HomeScreenState extends State<HomeScreen> {
             if (action == 'delete') _deleteFolder(folder);
           },
           itemBuilder: (_) => [
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'rename',
               child: ListTile(
-                leading: Icon(Icons.edit_outlined),
-                title: Text('Renommer'),
+                leading: const Icon(Icons.edit_outlined),
+                title: Text(l10n.home_rename),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
-            const PopupMenuItem(
+            PopupMenuItem(
               value: 'delete',
               child: ListTile(
-                leading: Icon(Icons.delete_outline, color: Colors.red),
-                title: Text('Supprimer', style: TextStyle(color: Colors.red)),
+                leading: const Icon(Icons.delete_outline, color: Colors.red),
+                title: Text(l10n.common_delete, style: const TextStyle(color: Colors.red)),
                 contentPadding: EdgeInsets.zero,
               ),
             ),
@@ -528,6 +540,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildProgressSubtitle(Ebook ebook) {
+    final l10n = AppLocalizations.of(context)!;
     final total = ebook.totalSentences;
     final pos = ebook.lastReadPosition;
     final hasProgress = total > 0 && pos > 0;
@@ -556,10 +569,10 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 2),
           Text(
             pos == 0
-                ? 'Non commencé'
+                ? l10n.home_notStarted
                 : pos >= total - 1
-                    ? 'Terminé ✓'
-                    : '${(progress * 100).round()}% lu • phrase $pos / $total',
+                    ? l10n.home_finished
+                    : l10n.home_percentReadSentence((progress * 100).round(), pos, total),
             style: TextStyle(fontSize: 11, color: Colors.grey[600]),
           ),
         ],
@@ -699,7 +712,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     pos == 0
                         ? isPdf ? 'PDF' : 'EPUB'
                         : pos >= total - 1
-                            ? 'Terminé ✓'
+                            ? AppLocalizations.of(context)!.home_finished
                             : '${(progress * 100).round()}%',
                     style: TextStyle(fontSize: 10, color: Colors.grey[500]),
                   ),
@@ -713,6 +726,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEbookTile(Ebook ebook) {
+    final l10n = AppLocalizations.of(context)!;
     final isSelected = _selectedIds.contains(ebook.id);
 
     return Card(
@@ -753,45 +767,45 @@ class _HomeScreenState extends State<HomeScreen> {
                   if (action == 'delete') _deleteEbook(ebook);
                 },
                 itemBuilder: (_) => [
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'open',
                     child: ListTile(
-                      leading: Icon(Icons.play_arrow_outlined),
-                      title: Text('Ouvrir'),
+                      leading: const Icon(Icons.play_arrow_outlined),
+                      title: Text(l10n.home_open),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'rename',
                     child: ListTile(
-                      leading: Icon(Icons.edit_outlined),
-                      title: Text('Renommer'),
+                      leading: const Icon(Icons.edit_outlined),
+                      title: Text(l10n.home_rename),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'select',
                     child: ListTile(
-                      leading: Icon(Icons.check_circle_outline),
-                      title: Text('Sélectionner'),
+                      leading: const Icon(Icons.check_circle_outline),
+                      title: Text(l10n.home_select),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'move',
                     child: ListTile(
-                      leading: Icon(Icons.drive_file_move_outline),
-                      title: Text('Déplacer dans un dossier'),
+                      leading: const Icon(Icons.drive_file_move_outline),
+                      title: Text(l10n.home_moveToFolderMenu),
                       contentPadding: EdgeInsets.zero,
                     ),
                   ),
-                  const PopupMenuItem(
+                  PopupMenuItem(
                     value: 'delete',
                     child: ListTile(
-                      leading: Icon(Icons.delete_outline, color: Colors.red),
+                      leading: const Icon(Icons.delete_outline, color: Colors.red),
                       title: Text(
-                        'Supprimer',
-                        style: TextStyle(color: Colors.red),
+                        l10n.common_delete,
+                        style: const TextStyle(color: Colors.red),
                       ),
                       contentPadding: EdgeInsets.zero,
                     ),
@@ -814,6 +828,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildEmptyState() {
+    final l10n = AppLocalizations.of(context)!;
     return Center(
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -821,12 +836,12 @@ class _HomeScreenState extends State<HomeScreen> {
           Icon(Icons.library_books, size: 80, color: Colors.grey[400]),
           const SizedBox(height: 16),
           Text(
-            'Aucun livre',
+            l10n.home_noBooks,
             style: Theme.of(context).textTheme.headlineSmall,
           ),
           const SizedBox(height: 8),
           Text(
-            'Appuyez sur + pour ajouter un PDF ou EPUB',
+            l10n.home_addPrompt,
             style: Theme.of(context)
                 .textTheme
                 .bodyMedium
@@ -968,6 +983,7 @@ class _EbookCardMenu extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return PopupMenuButton<String>(
       icon: Container(
         padding: const EdgeInsets.all(2),
@@ -987,47 +1003,47 @@ class _EbookCardMenu extends StatelessWidget {
         }
       },
       itemBuilder: (_) => [
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'open',
           child: ListTile(
-            leading: Icon(Icons.play_arrow_outlined),
-            title: Text('Ouvrir'),
+            leading: const Icon(Icons.play_arrow_outlined),
+            title: Text(l10n.home_open),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'rename',
           child: ListTile(
-            leading: Icon(Icons.edit_outlined),
-            title: Text('Renommer'),
+            leading: const Icon(Icons.edit_outlined),
+            title: Text(l10n.home_rename),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'select',
           child: ListTile(
-            leading: Icon(Icons.check_circle_outline),
-            title: Text('Sélectionner'),
+            leading: const Icon(Icons.check_circle_outline),
+            title: Text(l10n.home_select),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'move',
           child: ListTile(
-            leading: Icon(Icons.drive_file_move_outline),
-            title: Text('Déplacer'),
+            leading: const Icon(Icons.drive_file_move_outline),
+            title: Text(l10n.home_move),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),
         ),
-        const PopupMenuItem(
+        PopupMenuItem(
           value: 'delete',
           child: ListTile(
-            leading: Icon(Icons.delete_outline, color: Colors.red),
-            title: Text('Supprimer', style: TextStyle(color: Colors.red)),
+            leading: const Icon(Icons.delete_outline, color: Colors.red),
+            title: Text(l10n.common_delete, style: const TextStyle(color: Colors.red)),
             contentPadding: EdgeInsets.zero,
             dense: true,
           ),

@@ -7,23 +7,27 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'package:scrollable_positioned_list/scrollable_positioned_list.dart';
+import '../l10n/generated/app_localizations.dart';
 import '../models/ebook.dart';
 import '../models/annotation.dart';
-import '../services/tts_service.dart' show TtsService, Voice;
-import '../services/local_tts_service.dart';
+import '../services/tts_service.dart' show Voice;
+import '../services/sherpa_tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/translation_service.dart';
+import '../services/local_llm_service.dart';
 import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, readerMarginNotifier,
         dictionaryLanguageNotifier, translationLanguageNotifier,
         audioHandler, ensureAudioHandler;
 import '../services/stats_service.dart';
 import '../data/voice_characters.dart';
-import '../data/cloud_voices.dart';
 import '../widgets/voice_avatar.dart';
 import '../widgets/translation_sheet.dart';
 import '../widgets/dictionary_sheet.dart';
 import 'annotations_screen.dart';
+import '../widgets/page_turner.dart';
+import '../services/reading_theme.dart';
+import '../services/talktome_audio_handler.dart' show TalkTomeAudioHandler;
 
 // ─── Modèles internes ────────────────────────────────────────────────────────
 
@@ -52,8 +56,14 @@ class _ParagraphItem extends _BookItem {
   /// stable pour une annotation, contrairement aux index de phrase globaux
   /// qui dépendent de l'ensemble du livre.
   final int paragraphIndexInChapter;
+  /// Mode livre : un paragraphe coupé entre deux pages est affiché en
+  /// morceaux. [charOffset] = position du morceau dans le texte du
+  /// paragraphe entier, pour que les surlignages enregistrés restent
+  /// alignés quel que soit le mode.
+  final int charOffset;
   const _ParagraphItem(
-      this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter);
+      this.sentenceIndices, this.chapterIndex, this.paragraphIndexInChapter,
+      {this.charOffset = 0});
 }
 
 /// Contenu de la bulle « mot sous le doigt » (voir _showSelectionBubble) :
@@ -144,22 +154,16 @@ class _HighlightedParagraph extends StatelessWidget {
           // paragraphes se remesurent en même temps) ne doit jamais faire
           // planter tout l'écran de lecture avec le rectangle d'erreur
           // rouge de Flutter — au pire, le texte s'affiche sans surlignage.
+          return _CachedTextPainter(
+            text: text,
+            placeholderCount: placeholderCount,
+            maxWidth: constraints.maxWidth,
+            textDirection: Directionality.of(context),
+            builder: (painter) {
+          if (painter == null) {
+            return RichText(text: text, textAlign: TextAlign.justify);
+          }
           try {
-            final painter = TextPainter(
-              text: text,
-              textAlign: TextAlign.justify,
-              textDirection: Directionality.of(context),
-            );
-            if (placeholderCount > 0) {
-              painter.setPlaceholderDimensions(List.generate(
-                placeholderCount,
-                (_) => const PlaceholderDimensions(
-                  size: Size.zero,
-                  alignment: PlaceholderAlignment.middle,
-                ),
-              ));
-            }
-            painter.layout(maxWidth: constraints.maxWidth);
             final paragraphSize = Size(constraints.maxWidth, painter.height);
 
             // Traduit une position locale en un mot, en la bornant d'abord
@@ -282,9 +286,100 @@ class _HighlightedParagraph extends StatelessWidget {
           } catch (_) {
             return RichText(text: text, textAlign: TextAlign.justify);
           }
+            },
+          );
         },
       ),
     );
+  }
+}
+
+/// Garde UN TextPainter par paragraphe et ne le refait que si le texte, la
+/// largeur ou le nombre d'ancres change. Avant, un TextPainter neuf était
+/// créé (et jamais libéré) à chaque tick de mot (~25 ms) pendant la lecture :
+/// des milliers de mises en page natives s'accumulaient en mémoire.
+class _CachedTextPainter extends StatefulWidget {
+  final InlineSpan text;
+  final int placeholderCount;
+  final double maxWidth;
+  final TextDirection textDirection;
+  final Widget Function(TextPainter? painter) builder;
+
+  const _CachedTextPainter({
+    required this.text,
+    required this.placeholderCount,
+    required this.maxWidth,
+    required this.textDirection,
+    required this.builder,
+  });
+
+  @override
+  State<_CachedTextPainter> createState() => _CachedTextPainterState();
+}
+
+class _CachedTextPainterState extends State<_CachedTextPainter> {
+  TextPainter? _painter;
+  InlineSpan? _laidOutText;
+  double? _laidOutWidth;
+  int? _laidOutPlaceholders;
+  TextDirection? _laidOutDirection;
+
+  TextPainter _painterFor() {
+    final cached = _painter;
+    if (cached != null &&
+        identical(_laidOutText, widget.text) &&
+        _laidOutWidth == widget.maxWidth &&
+        _laidOutPlaceholders == widget.placeholderCount &&
+        _laidOutDirection == widget.textDirection) {
+      return cached;
+    }
+
+    final painter = TextPainter(
+      text: widget.text,
+      textAlign: TextAlign.justify,
+      textDirection: widget.textDirection,
+    );
+    if (widget.placeholderCount > 0) {
+      painter.setPlaceholderDimensions(List.generate(
+        widget.placeholderCount,
+        (_) => const PlaceholderDimensions(
+          size: Size.zero,
+          alignment: PlaceholderAlignment.middle,
+        ),
+      ));
+    }
+    try {
+      painter.layout(maxWidth: widget.maxWidth);
+    } catch (_) {
+      painter.dispose();
+      rethrow;
+    }
+
+    cached?.dispose();
+    _painter = painter;
+    _laidOutText = widget.text;
+    _laidOutWidth = widget.maxWidth;
+    _laidOutPlaceholders = widget.placeholderCount;
+    _laidOutDirection = widget.textDirection;
+    return painter;
+  }
+
+  @override
+  void dispose() {
+    _painter?.dispose();
+    _painter = null;
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    TextPainter? painter;
+    try {
+      painter = _painterFor();
+    } catch (_) {
+      painter = null;
+    }
+    return widget.builder(painter);
   }
 }
 
@@ -463,7 +558,6 @@ class ReaderScreen extends StatefulWidget {
 }
 
 class _ReaderScreenState extends State<ReaderScreen> {
-  late TtsService _ttsService;
 
   // Abonnement à l'état de lecture du handler (playbackState)
   StreamSubscription<dynamic>? _playerStateSub;
@@ -527,6 +621,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
   bool _autoScrollEnabled = true;  // défilement automatique pendant la lecture
   bool _readerVisible = true;       // afficher/masquer le texte pendant la lecture
 
+  // ── Mode livre (pages à tourner, façon liseuse) ─────────────────────────
+  bool _bookMode = Hive.box('settings').get('bookMode', defaultValue: false) as bool;
+  PageTurnStyle _pageTurnStyle =
+      Hive.box('settings').get('pageTurn', defaultValue: 'curl') == 'slide'
+          ? PageTurnStyle.slide
+          : PageTurnStyle.curl;
+  final GlobalKey<PageTurnerState> _pageTurnerKey = GlobalKey();
+  List<List<_BookItem>> _pages = const [];
+  List<int> _pageOfSentence = const [];
+  String _paginationKey = '';
+  String _paginatingKey = '';
+  int _paginationGen = 0;
+  int _bookPage = 0;
+  /// Phrase à garder à l'écran quand les pages sont recalculées (taille du
+  /// texte, police, rotation) : la première de la page affichée.
+  int _bookAnchorSentence = -1;
+
   // ── Traduction en direct (bulle au-dessus du texte pendant la lecture) ──
   // Volontairement NON persisté (comme _autoScrollEnabled) : se réactive à
   // chaque ouverture du lecteur plutôt que de rester allumé silencieusement
@@ -550,8 +661,13 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // voir _buildTranslationBubble pour pourquoi c'est nécessaire.
   Offset? _dragStartBubbleOffset;
 
+  /// Mode « lire la traduction » : la voix lit la traduction (dans la bulle,
+  /// avec suivi des mots) au lieu du texte du livre, qui continue d'être
+  /// suivi en parallèle. Voix choisie mémorisée par langue de traduction.
+  bool _readTranslationAloud = false;
+
   List<Voice> availableVoices = [];
-  String selectedVoice = "en-US-Neural2-C";
+  String selectedVoice = "sherpa-kokoro-af_heart";
   String selectedLanguageCode = "en-US";
 
   bool _isSynthesizing = false;
@@ -576,7 +692,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   @override
   void initState() {
     super.initState();
-    _ttsService = TtsService();
     _buildFlatList();
     _annotationBox = Hive.box<Annotation>('annotations');
     _loadSavedHighlights();
@@ -657,6 +772,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
     });
     _selectionRangeNotifier.value = word;
     _showSelectionBubble(wordText, globalPosition);
+    // Une sélection annonce souvent « Définir » ou « Traduire » : on charge
+    // l'IA locale dès maintenant (sans effet si déjà chargée ou absente),
+    // la réponse arrive ainsi bien plus vite après le tap.
+    unawaited(LocalLlmService.instance.warmUp());
+  }
+
+  /// La phrase du paragraphe sélectionné qui contient la sélection — donnée
+  /// au dictionnaire pour qu'il explique le sens du mot À CET ENDROIT.
+  String? _selectionContextSentence() {
+    final text = _selectionParagraphPlainText;
+    final range = _selectionRangeNotifier.value;
+    if (text == null || range == null || !range.isValid) return null;
+    var start = range.start;
+    while (start > 0 && !'.!?…\n'.contains(text[start - 1])) {
+      start--;
+    }
+    var end = range.end;
+    while (end < text.length && !'.!?…\n'.contains(text[end])) {
+      end++;
+    }
+    if (end < text.length) end++; // garder la ponctuation finale
+    final sentence = text.substring(start, end).trim();
+    return sentence.length > 400 ? sentence.substring(0, 400) : sentence;
   }
 
   void _onSelectionUpdate(
@@ -853,6 +991,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final para = _selectingParagraph;
     final chapterId =
         para == null ? '' : widget.ebook.chapters[para.chapterIndex].id;
+    final contextSentence = _selectionContextSentence();
     _cancelSelection();
     await showModalBottomSheet<void>(
       context: context,
@@ -870,6 +1009,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
           sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
           ebookId: widget.ebook.id,
           chapterId: chapterId,
+          contextSentence: contextSentence,
         ),
       ),
     );
@@ -942,8 +1082,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ebookId: widget.ebook.id,
       chapterId: chapter.id,
       paragraphIndexInChapter: para.paragraphIndexInChapter,
-      startOffset: start,
-      endOffset: end,
+      startOffset: start + para.charOffset,
+      endOffset: end + para.charOffset,
       selectedText: selectedText,
       createdAt: DateTime.now(),
     );
@@ -973,51 +1113,80 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// écran. L'utilisateur peut néanmoins la faire glisser (appui prolongé +
   /// déplacement) à l'endroit de son choix — voir _translationBubbleOffset.
   Widget _buildTranslationBubble(BuildContext context) {
-    final translation = _currentTranslation;
-    if (translation == null) return const SizedBox.shrink();
+    final h = audioHandler;
+    final readingAloud = h != null && h.isReadingTranslation;
+    final fallback = _currentTranslation;
+    if (!readingAloud && fallback == null) return const SizedBox.shrink();
 
     final screenSize = MediaQuery.sizeOf(context);
-    // Largeur FIXE (plutôt que left/right qui étirent jusqu'aux bords) dès
-    // qu'on connaît une position glissée : sans ça, la bulle collerait
-    // toujours au bord droit de l'écran une fois posée près du bord gauche.
-    const bubbleWidth = 280.0;
-    final offset = _translationBubbleOffset ??
-        Offset((screenSize.width - bubbleWidth) / 2, 8);
-    // Bornes larges plutôt qu'une mesure exacte de la hauteur de la bulle
-    // (variable selon la longueur du texte traduit) : suffisant pour
-    // l'empêcher de sortir complètement de l'écran, pas besoin de plus de
-    // précision pour ce geste de confort.
-    final clampedLeft = offset.dx.clamp(0.0, (screenSize.width - bubbleWidth).clamp(0.0, double.infinity));
-    final clampedTop = offset.dy.clamp(0.0, screenSize.height - 120);
+    final scheme = Theme.of(context).colorScheme;
+    // Toute la largeur de l'écran (marge de 12 px) : le texte tient sur moins
+    // de lignes, la bulle est moins haute. Seule la position verticale se
+    // déplace (appui prolongé + glisser).
+    final top = (_translationBubbleOffset?.dy ?? 8).clamp(0.0, screenSize.height - 160);
+    final baseStyle = TextStyle(
+      color: scheme.onPrimaryContainer,
+      fontSize: 16,
+      height: 1.4,
+    );
+
+    Widget content;
+    if (readingAloud) {
+      // Lecture de la traduction : la bulle affiche EXACTEMENT ce que la voix
+      // prononce, avec le mot en cours surligné.
+      content = ValueListenableBuilder<String?>(
+        valueListenable: h.spokenTextNotifier,
+        builder: (context, spoken, _) {
+          final text = spoken ?? fallback ?? '';
+          return ValueListenableBuilder<int>(
+            valueListenable: h.spokenWordIndexNotifier,
+            builder: (context, active, _) {
+              final words = text.split(RegExp(r'(?<=\s)'));
+              var wordIdx = -1;
+              return Text.rich(
+                TextSpan(style: baseStyle, children: [
+                  for (final w in words)
+                    TextSpan(
+                      text: w,
+                      style: (w.trim().isNotEmpty && ++wordIdx == active)
+                          ? TextStyle(
+                              fontWeight: FontWeight.w700,
+                              backgroundColor: scheme.primary.withValues(alpha: 0.22),
+                            )
+                          : null,
+                    ),
+                ]),
+              );
+            },
+          );
+        },
+      );
+    } else {
+      content = Text(fallback!, style: baseStyle);
+    }
 
     return Positioned(
-      left: clampedLeft,
-      top: clampedTop,
-      width: bubbleWidth,
+      left: 12,
+      right: 12,
+      top: top,
       child: GestureDetector(
-        // offsetFromOrigin est mesuré depuis le POINT DE DÉPART de l'appui
-        // prolongé, pas depuis la dernière position — il faut donc partir
-        // d'une position de référence fixée une fois au début du geste
-        // (_dragStartBubbleOffset), sinon le déplacement s'additionne à
-        // chaque frame et la bulle s'envole beaucoup plus vite que le doigt.
-        onLongPressStart: (_) => _dragStartBubbleOffset = Offset(clampedLeft, clampedTop),
+        // offsetFromOrigin part du point de départ de l'appui prolongé : on
+        // repart donc d'une position de référence fixée au début du geste.
+        onLongPressStart: (_) => _dragStartBubbleOffset = Offset(0, top),
         onLongPressMoveUpdate: (details) {
           final start = _dragStartBubbleOffset;
           if (start == null) return;
           setState(() {
-            _translationBubbleOffset = start + details.offsetFromOrigin;
+            _translationBubbleOffset = Offset(0, start.dy + details.offsetFromOrigin.dy);
           });
         },
         child: Material(
-          color: Theme.of(context).colorScheme.primaryContainer,
+          color: scheme.primaryContainer,
           elevation: 4,
           borderRadius: BorderRadius.circular(16),
           child: Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-            child: Text(
-              translation,
-              style: TextStyle(color: Theme.of(context).colorScheme.onPrimaryContainer),
-            ),
+            child: content,
           ),
         ),
       ),
@@ -1070,12 +1239,31 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   constraints: BoxConstraints(
                     maxWidth: MediaQuery.sizeOf(context).width - 32,
                   ),
-                  child: Row(
+                  // Boutons compacts + réduction automatique si la place
+                  // manque encore (4 boutons sur un écran étroit) : jamais
+                  // de débordement à droite.
+                  child: FittedBox(
+                    fit: BoxFit.scaleDown,
+                    child: TextButtonTheme(
+                    data: TextButtonThemeData(
+                      style: TextButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 10),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: FilledButtonTheme(
+                    data: FilledButtonThemeData(
+                      style: FilledButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(horizontal: 14),
+                        visualDensity: VisualDensity.compact,
+                      ),
+                    ),
+                    child: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
                       TextButton(
                         onPressed: _cancelSelection,
-                        child: const Text('Annuler'),
+                        child: Text(AppLocalizations.of(context)!.common_cancel),
                       ),
                       const SizedBox(width: 4),
                       if (singleWord != null) ...[
@@ -1088,7 +1276,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           // fonction, c'est l'interdiction documentée qui a
                           // motivé le fait que la bulle n'affiche déjà pas
                           // d'aperçu du texte sélectionné.
-                          label: const Text('Définir'),
+                          label: Text(AppLocalizations.of(context)!.reader_define),
                         ),
                         const SizedBox(width: 4),
                       ],
@@ -1097,16 +1285,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
                           onPressed: () => _openTranslationForText(selectedText),
                           icon: const Icon(Icons.g_translate_rounded, size: 18),
                           // Libellé FIXE, même raison que "Définir" ci-dessus.
-                          label: const Text('Traduire'),
+                          label: Text(AppLocalizations.of(context)!.reader_translate),
                         ),
                         const SizedBox(width: 4),
                       ],
                       FilledButton.icon(
                         onPressed: _saveSelectionAsAnnotation,
                         icon: const Icon(Icons.border_color_rounded, size: 18),
-                        label: const Text('Surligner'),
+                        label: Text(AppLocalizations.of(context)!.reader_highlight),
                       ),
                     ],
+                  ),
+                  ),
+                  ),
                   ),
                 ),
               ),
@@ -1141,7 +1332,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       sentences: _sentences.map((s) => s.text).toList(),
       bookTitle: widget.ebook.title,
       ebookId: widget.ebook.id,
-      ttsService: _ttsService,
       voiceName: selectedVoice,
       languageCode: selectedLanguageCode,
       speed: _playbackSpeed,
@@ -1232,13 +1422,25 @@ class _ReaderScreenState extends State<ReaderScreen> {
     if (index < 0 || index >= _sentences.length) return;
     final requestId = ++_translationRequestId;
     try {
-      final translated = await _translationService.translate(
+      // ML Kit (traducteur neuronal sur le téléphone) : instantané, il suit
+      // le rythme de la lecture sans rien coûter.
+      final translated = await _translationService.translateLive(
         text: _sentences[index].text,
         sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
         targetLang: translationLanguageNotifier.value,
       );
       if (!mounted || requestId != _translationRequestId) return;
       setState(() => _currentTranslation = translated);
+      // Phrase suivante traduite d'avance : elle s'affichera sans délai.
+      if (index + 1 < _sentences.length) {
+        unawaited(_translationService
+            .translateLive(
+              text: _sentences[index + 1].text,
+              sourceLang: DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName),
+              targetLang: translationLanguageNotifier.value,
+            )
+            .then<void>((_) {}, onError: (_) {}));
+      }
     } catch (_) {
       // Bulle laissée telle quelle (garde la dernière traduction valide)
       // plutôt que d'afficher une erreur pour une seule phrase manquée.
@@ -1250,7 +1452,52 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _translationModeEnabled = enabled;
       if (!_translationModeEnabled) _currentTranslation = null;
     });
-    if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+    if (_translationModeEnabled) {
+      final src = DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName);
+      // Télécharge les modèles ML Kit (une fois) puis traduit la phrase.
+      TranslationService.prepareLive(src, translationLanguageNotifier.value).then((_) {
+        _loadTranslationForCurrentSentence();
+        _applyTranslationReading();
+      });
+    } else {
+      _applyTranslationReading();
+    }
+  }
+
+  /// Voix installées pour la langue de traduction [lang] (« fr », « pt »…).
+  List<Voice> _voicesForLanguage(String lang) => availableVoices
+      .where((v) => v.languageCode.toLowerCase().startsWith('${lang.toLowerCase()}-'))
+      .toList();
+
+  /// Voix choisie pour lire la traduction dans [lang] (mémorisée), sinon la
+  /// première voix installée de cette langue.
+  String? _translationVoiceFor(String lang) {
+    final voices = _voicesForLanguage(lang);
+    if (voices.isEmpty) return null;
+    final saved = Hive.box('settings').get('translationVoice_$lang') as String?;
+    return voices.any((v) => v.name == saved) ? saved : voices.first.name;
+  }
+
+  /// Synchronise le lecteur audio avec le mode « lire la traduction ».
+  void _applyTranslationReading() {
+    final h = audioHandler;
+    if (h == null) return;
+    final target = translationLanguageNotifier.value;
+    final src = DictionaryService.langFromVoiceName(widget.ebook.selectedVoiceName);
+    final voice = _translationVoiceFor(target);
+    final active = _translationModeEnabled && _readTranslationAloud && voice != null && src != target;
+    if (!active) {
+      if (h.isReadingTranslation) h.setTranslationReading();
+      return;
+    }
+    h.setTranslationReading(
+      voiceName: voice,
+      textProvider: (i) => _translationService.translateLive(
+        text: _sentences[i].text,
+        sourceLang: src,
+        targetLang: target,
+      ),
+    );
   }
 
   /// Panneau ouvert en tapant sur l'icône de dictionnaire de l'AppBar : ne
@@ -1268,6 +1515,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) {
+        final l10n = AppLocalizations.of(context)!;
         final bottomPad = MediaQuery.of(context).padding.bottom + 24;
         return Padding(
           padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
@@ -1285,7 +1533,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
               ),
-              Text('Dictionnaire',
+              Text(l10n.annotations_tabDictionary,
                   style: Theme.of(context).textTheme.titleLarge?.copyWith(
                       fontWeight: FontWeight.bold)),
               const SizedBox(height: 8),
@@ -1294,7 +1542,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 builder: (context, lang, _) => ListTile(
                   contentPadding: EdgeInsets.zero,
                   leading: const Icon(Icons.language_rounded),
-                  title: const Text('Langue des définitions'),
+                  title: Text(l10n.reader_definitionsLanguage),
                   trailing: DropdownButton<String>(
                     value: lang,
                     underline: const SizedBox(),
@@ -1334,6 +1582,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+          final l10n = AppLocalizations.of(context)!;
           final bottomPad = MediaQuery.of(context).padding.bottom + 24;
           return Padding(
             padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
@@ -1351,14 +1600,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ),
                   ),
                 ),
-                Text('Traduction en direct',
+                Text(l10n.reader_liveTranslationTitle,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 8),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: const Text('Activée'),
-                  subtitle: const Text('Bulle de traduction pendant la lecture'),
+                  title: Text(l10n.reader_enabled),
+                  subtitle: Text(l10n.reader_translationBubbleHint),
                   value: _translationModeEnabled,
                   onChanged: (value) {
                     _setTranslationModeEnabled(value);
@@ -1370,7 +1619,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   builder: (context, lang, _) => ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.language_rounded),
-                    title: const Text('Langue de traduction'),
+                    title: Text(l10n.profileScreen_translationLanguage),
                     trailing: DropdownButton<String>(
                       value: lang,
                       underline: const SizedBox(),
@@ -1387,11 +1636,67 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         // Redemande la traduction de la phrase courante tout
                         // de suite dans la nouvelle langue, plutôt que
                         // d'attendre le prochain changement de phrase.
-                        if (_translationModeEnabled) _loadTranslationForCurrentSentence();
+                        if (_translationModeEnabled) {
+                          final src = DictionaryService.langFromVoiceName(
+                              widget.ebook.selectedVoiceName);
+                          TranslationService.prepareLive(src, value).then((_) {
+                            _loadTranslationForCurrentSentence();
+                            _applyTranslationReading();
+                          });
+                        }
+                        setModalState(() {});
                       },
                     ),
                   ),
                 ),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.record_voice_over_rounded),
+                  title: Text(l10n.reader_readTranslationAloud),
+                  subtitle: Text(l10n.reader_readTranslationAloudHint),
+                  value: _readTranslationAloud,
+                  onChanged: !_translationModeEnabled
+                      ? null
+                      : (value) {
+                          setState(() => _readTranslationAloud = value);
+                          setModalState(() {});
+                          _applyTranslationReading();
+                        },
+                ),
+                if (_readTranslationAloud && _translationModeEnabled)
+                  Builder(builder: (context) {
+                    final lang = translationLanguageNotifier.value;
+                    final voices = _voicesForLanguage(lang);
+                    if (voices.isEmpty) {
+                      return ListTile(
+                        contentPadding: EdgeInsets.zero,
+                        leading: const Icon(Icons.info_outline_rounded),
+                        title: Text(l10n.reader_noVoiceForLanguage),
+                      );
+                    }
+                    return ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.mic_rounded),
+                      title: Text(l10n.reader_translationVoice),
+                      trailing: DropdownButton<String>(
+                        value: _translationVoiceFor(lang),
+                        underline: const SizedBox(),
+                        items: [
+                          for (final v in voices)
+                            DropdownMenuItem(
+                              value: v.name,
+                              child: Text('${v.displayName} (${v.languageCode})'),
+                            ),
+                        ],
+                        onChanged: (value) {
+                          if (value == null) return;
+                          Hive.box('settings').put('translationVoice_$lang', value);
+                          setModalState(() {});
+                          _applyTranslationReading();
+                        },
+                      ),
+                    );
+                  }),
               ],
             ),
           );
@@ -1409,6 +1714,11 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// minime, mais parfois un grand saut brusque (paragraphe long, dialogue
   /// court...) — ce qui donnait un défilement saccadé et étourdissant.
   Future<void> _autoScrollToCurrentSentence(int globalIndex) async {
+    if (_bookMode) {
+      // La page tourne toute seule quand la voix arrive en bas.
+      await _bookGoToSentence(globalIndex);
+      return;
+    }
     try {
       // L'ancre précise de la phrase (voir _sentenceAnchorKeys) en priorité
       // — sans elle, deux phrases voisines du même paragraphe pointeraient
@@ -1491,7 +1801,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
     final wordNotifier = audioHandler?.currentWordIndexNotifier;
     final chapterId = widget.ebook.chapters[para.chapterIndex].id;
     final savedRanges = (_savedHighlightsByChapter[chapterId]?[para.paragraphIndexInChapter] ?? const [])
-        .map((a) => TextRange(start: a.startOffset, end: a.endOffset))
+        .map((a) => TextRange(
+            start: (a.startOffset - para.charOffset).clamp(0, 1 << 30),
+            end: a.endOffset - para.charOffset))
+        .where((r) => r.end > 0)
         .toList();
     final isSelectingThis = identical(_selectingParagraph, para);
 
@@ -1660,6 +1973,326 @@ class _ReaderScreenState extends State<ReaderScreen> {
     );
   }
 
+  // ─── Mode livre ───────────────────────────────────────────────────────────
+
+  Widget _buildChapterHeader(BuildContext context, _ChapterHeader item) {
+    return Padding(
+      key: ValueKey('h_${item.chapterIndex}'),
+      padding: EdgeInsets.only(
+        top: item.chapterIndex == 0 || _bookMode ? 0 : 32,
+        bottom: 12,
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          if (item.chapterIndex > 0 && !_bookMode)
+            Divider(color: Colors.grey[300], height: 1),
+          if (!_bookMode) const SizedBox(height: 12),
+          Text(item.title, style: _chapterTitleStyle(context)),
+        ],
+      ),
+    );
+  }
+
+  TextStyle? _chapterTitleStyle(BuildContext context) =>
+      Theme.of(context).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold);
+
+  void _setBookMode(bool on) {
+    Hive.box('settings').put('bookMode', on);
+    setState(() {
+      _bookMode = on;
+      _showReturnButton = false;
+      _bookAnchorSentence = _currentGlobalIndex;
+      _paginationKey = '';
+      _paginatingKey = '';
+    });
+    if (!on) {
+      // Retour au défilement : la liste se recrée à la phrase en cours.
+      WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _scrollToSentence(_currentGlobalIndex, animate: false));
+    }
+  }
+
+  void _setPageTurnStyle(PageTurnStyle style) {
+    Hive.box('settings').put('pageTurn', style == PageTurnStyle.slide ? 'slide' : 'curl');
+    setState(() => _pageTurnStyle = style);
+  }
+
+  int? _pageForSentence(int globalIndex) {
+    if (globalIndex < 0 || globalIndex >= _pageOfSentence.length) return null;
+    final p = _pageOfSentence[globalIndex];
+    return p < 0 ? null : p;
+  }
+
+  Future<bool> _bookGoToSentence(int globalIndex, {bool animate = true}) async {
+    final p = _pageForSentence(globalIndex);
+    final turner = _pageTurnerKey.currentState;
+    if (p == null || turner == null) {
+      // Pages pas encore calculées : on s'y placera dès qu'elles le seront.
+      _bookAnchorSentence = globalIndex;
+      return true;
+    }
+    await turner.goTo(p, animate: animate);
+    return true;
+  }
+
+  void _onBookPageChanged(int page) {
+    final first = _firstSentenceOfPage(page);
+    final onCurrent = _pageForSentence(_currentGlobalIndex) == page;
+    setState(() {
+      _bookPage = page;
+      if (first != null) _bookAnchorSentence = first;
+      _showReturnButton = !onCurrent;
+    });
+  }
+
+  int? _firstSentenceOfPage(int page) {
+    if (page < 0 || page >= _pages.length) return null;
+    for (final item in _pages[page]) {
+      if (item is _ParagraphItem) return item.sentenceIndices.first;
+    }
+    return null;
+  }
+
+  /// Découpe le livre en pages qui tiennent exactement à l'écran, avec la
+  /// même police, taille et interligne que l'affichage. Un paragraphe trop
+  /// long continue sur la page suivante (coupé entre deux phrases) ; chaque
+  /// chapitre commence sur une nouvelle page. Fait par petits lots pour ne
+  /// jamais figer l'écran sur un long livre.
+  Future<void> _paginate(String key, Size area, double fontSize, String? fontFamily,
+      TextScaler scaler, TextStyle? titleStyle) async {
+    final gen = ++_paginationGen;
+    _paginatingKey = key;
+    final width = area.width - 32;
+    final lineH = scaler.scale(fontSize) * 1.6;
+    // Une ligne de marge : la phrase lue passe en gras et peut s'allonger.
+    final height = area.height - 16 - lineH;
+    final style = TextStyle(fontFamily: fontFamily, fontSize: fontSize, height: 1.6);
+    const paraGap = 10.0;
+
+    final pages = <List<_BookItem>>[];
+    final pageOf = List<int>.filled(_sentences.length, -1);
+    var page = <_BookItem>[];
+    var used = 0.0;
+
+    void closePage() {
+      if (page.isEmpty) return;
+      pages.add(page);
+      page = <_BookItem>[];
+      used = 0;
+    }
+
+    void addItem(_BookItem item, double h) {
+      page.add(item);
+      used += h;
+      if (item is _ParagraphItem) {
+        for (final i in item.sentenceIndices) {
+          pageOf[i] = pages.length;
+        }
+      }
+    }
+
+    double measureTitle(String t) {
+      final tp = TextPainter(
+        text: TextSpan(text: t, style: titleStyle),
+        textDirection: TextDirection.ltr,
+        textScaler: scaler,
+      )..layout(maxWidth: width);
+      final h = tp.height + 12;
+      tp.dispose();
+      return h;
+    }
+
+    var processed = 0;
+    for (final item in _displayItems) {
+      if (++processed % 120 == 0) {
+        await Future<void>.delayed(Duration.zero);
+        if (gen != _paginationGen || !mounted) return;
+      }
+      if (item is _ChapterHeader) {
+        closePage();
+        addItem(item, measureTitle(item.title));
+        continue;
+      }
+      final para = item as _ParagraphItem;
+      var remaining = List<int>.of(para.sentenceIndices);
+      var charOffset = 0;
+      while (remaining.isNotEmpty) {
+        // Texte tel qu'affiché : chaque phrase suivie d'une espace (les
+        // ancres invisibles devant chaque phrase n'ont pas de largeur).
+        final buf = StringBuffer();
+        final ends = <int>[];
+        for (final idx in remaining) {
+          buf.write(_sentences[idx].text);
+          ends.add(buf.length);
+          buf.write(' ');
+        }
+        final tp = TextPainter(
+          text: TextSpan(text: buf.toString(), style: style),
+          textDirection: TextDirection.ltr,
+          textScaler: scaler,
+        )..layout(maxWidth: width);
+        final free = height - used;
+        if (tp.height + paraGap <= free) {
+          addItem(
+              remaining.length == para.sentenceIndices.length
+                  ? para
+                  : _ParagraphItem(remaining, para.chapterIndex,
+                      para.paragraphIndexInChapter, charOffset: charOffset),
+              tp.height + paraGap);
+          tp.dispose();
+          break;
+        }
+        // Combien de phrases entières tiennent dans la place restante ?
+        var fit = 0;
+        for (var k = 0; k < ends.length; k++) {
+          final boxes = tp.getBoxesForSelection(
+              TextSelection(baseOffset: ends[k] - 1, extentOffset: ends[k]));
+          final bottom = boxes.isEmpty ? double.infinity : boxes.last.bottom;
+          if (bottom + paraGap <= free) {
+            fit = k + 1;
+          } else {
+            break;
+          }
+        }
+        tp.dispose();
+        if (fit == 0) {
+          if (page.isNotEmpty) {
+            closePage();
+            continue; // réessayer sur une page vide
+          }
+          fit = 1; // phrase plus haute qu'une page entière : tant pis
+        }
+        final part = remaining.sublist(0, fit);
+        addItem(
+            _ParagraphItem(part, para.chapterIndex, para.paragraphIndexInChapter,
+                charOffset: charOffset),
+            height); // page pleine
+        for (final idx in part) {
+          charOffset += 1 + _sentences[idx].text.length + 1;
+        }
+        remaining = remaining.sublist(fit);
+        closePage();
+      }
+    }
+    closePage();
+    if (gen != _paginationGen || !mounted) return;
+    setState(() {
+      _pages = pages;
+      _pageOfSentence = pageOf;
+      _paginationKey = key;
+      final anchor = _bookAnchorSentence >= 0 ? _bookAnchorSentence : _currentGlobalIndex;
+      _bookPage = (_pageForSentence(anchor) ?? 0).clamp(0, pages.isEmpty ? 0 : pages.length - 1);
+      _showReturnButton = false;
+    });
+  }
+
+  Widget _buildBookView(BuildContext context) {
+    return ValueListenableBuilder<double>(
+      valueListenable: fontSizeNotifier,
+      builder: (context, fontSize, _) => ValueListenableBuilder<String?>(
+        valueListenable: fontFamilyNotifier,
+        builder: (context, fontFamily, _) => ValueListenableBuilder<double>(
+          valueListenable: readerMarginNotifier,
+          builder: (context, readerMargin, _) => LayoutBuilder(builder: (context, c) {
+          const footer = 28.0;
+          final usable = c.maxHeight - footer;
+          // Marge réglable (Profil > Texte) en haut et en bas de chaque page,
+          // plafonnée pour laisser au moins la moitié de la page au texte
+          // (paysage). Sans AppBar, on évite aussi la barre d'état.
+          final margin = readerMargin.clamp(0.0, usable / 4).toDouble();
+          final marginTop = margin + (_readerVisible ? 0.0 : MediaQuery.of(context).padding.top);
+          final marginBottom = margin;
+          // La pagination mesure dans `area` : y retirer les marges garde le
+          // découpage des pages exact, et un changement de marge change la
+          // clé ci-dessous, donc relance la pagination.
+          final area = Size(c.maxWidth, usable - marginTop - marginBottom);
+          final scaler = MediaQuery.textScalerOf(context);
+          final key =
+              '${area.width.round()}x${area.height.round()}|$fontSize|$fontFamily|${scaler.scale(10)}';
+          if (key != _paginationKey) {
+            if (key != _paginatingKey) {
+              _paginatingKey = key;
+              final titleStyle = _chapterTitleStyle(context);
+              WidgetsBinding.instance.addPostFrameCallback(
+                  (_) => _paginate(key, area, fontSize, fontFamily, scaler, titleStyle));
+            }
+            return const Center(child: CircularProgressIndicator());
+          }
+          final scheme = Theme.of(context).colorScheme;
+          final grey = Theme.of(context)
+              .textTheme
+              .bodySmall
+              ?.copyWith(color: scheme.onSurface.withValues(alpha: 0.5));
+          return Stack(children: [
+            Positioned.fill(
+              child: Column(children: [
+                Expanded(
+                  child: PageTurner(
+                    key: _pageTurnerKey,
+                    itemCount: _pages.length,
+                    initialIndex: _bookPage,
+                    style: _pageTurnStyle,
+                    pageColor: Theme.of(context).scaffoldBackgroundColor,
+                    onPageChanged: _onBookPageChanged,
+                    itemBuilder: (context, i) => Padding(
+                      padding: EdgeInsets.fromLTRB(16, 16 + marginTop, 16, marginBottom),
+                      child: SingleChildScrollView(
+                        physics: const NeverScrollableScrollPhysics(),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            for (final item in _pages[i])
+                              if (item is _ChapterHeader)
+                                _buildChapterHeader(context, item)
+                              else
+                                _buildParagraphWidget(item as _ParagraphItem, null, context),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                SizedBox(
+                  height: footer,
+                  child: Center(
+                    child: Text(
+                        AppLocalizations.of(context)!
+                            .reader_pageOf(_bookPage + 1, _pages.length),
+                        style: grey),
+                  ),
+                ),
+              ]),
+            ),
+            // Toucher le bord droit / gauche : page suivante / précédente.
+            // Un appui long y sélectionne toujours le texte normalement.
+            Positioned(
+              left: 0,
+              top: 0,
+              bottom: footer,
+              width: c.maxWidth * 0.22,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _pageTurnerKey.currentState?.previous(),
+              ),
+            ),
+            Positioned(
+              right: 0,
+              top: 0,
+              bottom: footer,
+              width: c.maxWidth * 0.22,
+              child: GestureDetector(
+                behavior: HitTestBehavior.translucent,
+                onTap: () => _pageTurnerKey.currentState?.next(),
+              ),
+            ),
+          ]);
+        }),
+        ),
+      ),
+    );
+  }
+
   // ─── Construction de la liste ─────────────────────────────────────────────
 
   void _buildFlatList() {
@@ -1799,6 +2432,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// de lecture, où voir le défilement aide à se repérer).
   Future<bool> _scrollToSentence(int globalIndex, {bool animate = true}) async {
     if (globalIndex < 0 || globalIndex >= _sentences.length) return false;
+    if (_bookMode) return _bookGoToSentence(globalIndex, animate: animate);
     if (!_itemScrollController.isAttached) return false;
     bool success = false;
 
@@ -1870,6 +2504,10 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // items RÉELLEMENT visibles (fournis par le package) plutôt que sur une
   // estimation de position — fiable même très loin dans un livre long.
   bool get _isCurrentAbove {
+    if (_bookMode) {
+      final p = _pageForSentence(_currentGlobalIndex);
+      return p != null && p < _bookPage;
+    }
     final di = _findDisplayIndex(_currentGlobalIndex);
     if (di < 0) return false;
     final positions = _itemPositionsListener.itemPositions.value;
@@ -1953,6 +2591,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   Future<void> _initializeScreen() async {
     ebookBox = Hive.box<Ebook>('ebooks');
+    widget.ebook.lastOpenedAt = DateTime.now();
+    await ebookBox.put(widget.ebook.id, widget.ebook);
     if (widget.ebook.selectedVoiceName.isNotEmpty) {
       setState(() => selectedVoice = widget.ebook.selectedVoiceName);
     }
@@ -1970,17 +2610,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
     }
 
-    // Les voix cloud sont synthétisées en appel direct à l'API Google (clé
-    // API), donc plus besoin du backend ni du Wi-Fi maison — la liste est
-    // simplement hardcodée (vérifiée une à une contre le vrai catalogue
-    // Google). Les voix locales restent disponibles hors ligne comme avant.
+    // 100 % gratuit : uniquement les voix IA locales installées sur le
+    // téléphone, dans l'ordre anglais → français → portugais.
+    final aiVoices = await SherpaTtsService.instance.installedVoices();
     final voices = <Voice>[
-      ...allCloudVoices,
-      ...LocalTtsService.availableVoices.map((v) => Voice(
+      ...aiVoices.map((v) => Voice(
             name: v.name,
-            displayName: v.language,
+            displayName: v.displayName,
             languageCode: v.languageCode,
-            isLocal: true,
           )),
     ];
 
@@ -1992,11 +2629,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
       // Mettre à jour la voix dans le handler maintenant qu'on a le bon languageCode
       audioHandler?.updateVoice(savedVoice.name, savedVoice.languageCode);
     } else if (voices.isNotEmpty) {
-      // La voix sauvegardée pour ce livre n'existe plus (catalogue Google
-      // modifié depuis) — on bascule sur une voix valide, si possible dans
-      // la même langue, plutôt que de rester bloqué sur un nom de voix qui
-      // échouera à chaque tentative de synthèse.
-      final fallback = voices.where((v) => v.languageCode == selectedLanguageCode).firstOrNull ??
+      // La voix sauvegardée n'existe plus (ancienne voix cloud Google,
+      // retirée car payante) — on bascule sur une voix gratuite DE LA MÊME
+      // LANGUE que l'ancienne : d'abord la même variante (fr-FR), sinon la
+      // même langue (fr-CA → fr-FR), les voix IA locales passant en premier.
+      final oldLocale =
+          RegExp(r'([a-z]{2})-([A-Z]{2})').firstMatch(selectedVoice)?.group(0) ??
+              selectedLanguageCode;
+      final oldLang = oldLocale.split('-').first;
+      final fallback = voices.where((v) => v.languageCode == oldLocale).firstOrNull ??
+          voices.where((v) => v.languageCode.startsWith('$oldLang-')).firstOrNull ??
           voices.first;
       setState(() {
         selectedVoice = fallback.name;
@@ -2006,6 +2648,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       widget.ebook.selectedVoiceName = fallback.name;
       await ebookBox.put(widget.ebook.id, widget.ebook);
     }
+
+    // Précharge l'IA locale en arrière-plan (sans gêner la voix) : elle sera
+    // prête quand l'utilisateur touchera « Définir ».
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) unawaited(LocalLlmService.instance.warmUp(pauseAudio: false));
+    });
 
     // Demander les permissions requises pour la lecture en arrière-plan
     await _requestBackgroundPermissions();
@@ -2028,53 +2676,105 @@ class _ReaderScreenState extends State<ReaderScreen> {
     ebookBox.put(widget.ebook.id, widget.ebook);
   }
 
+  // Pas des boutons +/- — plus grossier que celui du slider (0.05) pour
+  // permettre d'atteindre rapidement une vitesse éloignée sans multiplier
+  // les appuis.
+  static const double _speedButtonStep = 0.1;
+
+  // Vitesses courantes proposées en accès rapide, en plus du slider et des
+  // boutons +/- — pour aller directement à une valeur usuelle sans tâtonner.
+  static const List<double> _speedPresets = [0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+  String _formatSpeed(double speed) =>
+      '${speed % 1 == 0 ? speed.toInt() : speed}x';
+
   void _showSpeedDialog() {
     showDialog(
       context: context,
       builder: (context) => StatefulBuilder(
         builder: (context, setDialogState) {
+          void changeSpeed(double newSpeed) {
+            final clamped = double.parse(
+              newSpeed.clamp(_speedMin, _speedMax).toStringAsFixed(2),
+            );
+            setDialogState(() => _playbackSpeed = clamped);
+            setState(() {});
+            audioHandler?.updateSpeed(clamped);
+          }
+
           return AlertDialog(
-            title: const Text('Vitesse de lecture'),
-            content: Column(
+            title: Text(AppLocalizations.of(context)!.reader_readingSpeed),
+            content: SingleChildScrollView(
+              child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
                 Text(
-                  '${_playbackSpeed % 1 == 0 ? _playbackSpeed.toInt() : _playbackSpeed}x',
+                  _formatSpeed(_playbackSpeed),
                   textAlign: TextAlign.center,
                   style: Theme.of(context).textTheme.headlineSmall?.copyWith(
                         fontWeight: FontWeight.bold,
                         color: Theme.of(context).colorScheme.primary,
                       ),
                 ),
-                Slider(
-                  value: _playbackSpeed,
-                  min: _speedMin,
-                  max: _speedMax,
-                  divisions: ((_speedMax - _speedMin) / _speedStep).round(),
-                  label: '${_playbackSpeed % 1 == 0 ? _playbackSpeed.toInt() : _playbackSpeed}x',
-                  onChanged: (value) {
-                    final newSpeed = double.parse(value.toStringAsFixed(2));
-                    setDialogState(() => _playbackSpeed = newSpeed);
-                    setState(() {});
-                    audioHandler?.updateSpeed(newSpeed);
-                  },
+                Row(
+                  children: [
+                    IconButton(
+                      icon: const Icon(Icons.remove_circle_outline),
+                      tooltip: AppLocalizations.of(context)!.reader_slower,
+                      onPressed: _playbackSpeed <= _speedMin
+                          ? null
+                          : () => changeSpeed(_playbackSpeed - _speedButtonStep),
+                    ),
+                    Expanded(
+                      child: Slider(
+                        value: _playbackSpeed,
+                        min: _speedMin,
+                        max: _speedMax,
+                        divisions: ((_speedMax - _speedMin) / _speedStep).round(),
+                        label: _formatSpeed(_playbackSpeed),
+                        onChanged: changeSpeed,
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.add_circle_outline),
+                      tooltip: AppLocalizations.of(context)!.reader_faster,
+                      onPressed: _playbackSpeed >= _speedMax
+                          ? null
+                          : () => changeSpeed(_playbackSpeed + _speedButtonStep),
+                    ),
+                  ],
                 ),
                 Padding(
                   padding: const EdgeInsets.symmetric(horizontal: 8),
                   child: Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                    children: const [
-                      Text('0.5x', style: TextStyle(color: Colors.grey)),
-                      Text('2x', style: TextStyle(color: Colors.grey)),
+                    children: [
+                      Text(_formatSpeed(_speedMin), style: const TextStyle(color: Colors.grey)),
+                      Text(_formatSpeed(_speedMax), style: const TextStyle(color: Colors.grey)),
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  alignment: WrapAlignment.center,
+                  children: [
+                    for (final preset in _speedPresets)
+                      ChoiceChip(
+                        label: Text(_formatSpeed(preset)),
+                        selected: (_playbackSpeed - preset).abs() < 0.001,
+                        onSelected: (_) => changeSpeed(preset),
+                      ),
+                  ],
+                ),
               ],
+            ),
             ),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context),
-                child: const Text('Fermer'),
+                child: Text(AppLocalizations.of(context)!.common_close),
               ),
             ],
           );
@@ -2193,6 +2893,58 @@ class _ReaderScreenState extends State<ReaderScreen> {
   /// précise (avec région : US, UK, Canada...) sous un titre, avec des
   /// boutons de raccourci par famille de langue en haut. N'interrompt pas
   /// la lecture (showModalBottomSheet ne touche pas à audioHandler).
+  /// Timbre (plus grave ↔ plus aigu) de la voix actuelle, mémorisé pour
+  /// chaque voix et appliqué tout de suite, même en pleine phrase.
+  Widget _buildPitchSlider(BuildContext context, VoidCallback refresh) {
+    final l10n = AppLocalizations.of(context)!;
+    final voice = audioHandler?.voiceName ?? widget.ebook.selectedVoiceName;
+    final pitch = TalkTomeAudioHandler.pitchFor(voice);
+    final name = characterForVoice(voice).name;
+    final grey = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            const Icon(Icons.graphic_eq_rounded, size: 18, color: Colors.grey),
+            const SizedBox(width: 6),
+            Expanded(
+              child: Text('${l10n.reader_voicePitch} — $name',
+                  style: Theme.of(context).textTheme.labelLarge,
+                  overflow: TextOverflow.ellipsis),
+            ),
+            if ((pitch - 1.0).abs() > 0.005)
+              TextButton(
+                onPressed: () async {
+                  await audioHandler?.setVoicePitch(voice, 1.0);
+                  refresh();
+                },
+                child: Text(l10n.reader_pitchNormal),
+              ),
+          ],
+        ),
+        Row(
+          children: [
+            Text(l10n.reader_pitchDeeper, style: grey),
+            Expanded(
+              child: Slider(
+                value: pitch,
+                min: TalkTomeAudioHandler.pitchMin,
+                max: TalkTomeAudioHandler.pitchMax,
+                divisions: 12,
+                onChanged: (v) async {
+                  await audioHandler?.setVoicePitch(voice, v);
+                  refresh();
+                },
+              ),
+            ),
+            Text(l10n.reader_pitchLighter, style: grey),
+          ],
+        ),
+      ],
+    );
+  }
+
   void _showVoicePicker() {
     // Groupe les voix par langue précise, en conservant l'ordre d'origine.
     final groups = <String, List<Voice>>{};
@@ -2211,7 +2963,12 @@ class _ReaderScreenState extends State<ReaderScreen> {
       if (!families.contains(f)) families.add(f);
     }
     final hasLocalVoices = groups.keys.any((lang) => lang.contains('hors ligne'));
-    final chips = [...families, if (hasLocalVoices) 'Hors ligne'];
+    final hasAiVoices = groups.keys.any((lang) => lang.contains('IA locale'));
+    final chips = [
+      if (hasAiVoices) 'IA locale',
+      ...families,
+      if (hasLocalVoices) 'Hors ligne',
+    ];
 
     final sectionKeys = {for (final lang in groups.keys) lang: GlobalKey()};
     final panelScrollController = ScrollController();
@@ -2251,13 +3008,15 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
                 Text(
-                  'Choisir une voix',
+                  AppLocalizations.of(context)!.reader_chooseVoice,
                   style: Theme.of(context)
                       .textTheme
                       .titleLarge
                       ?.copyWith(fontWeight: FontWeight.bold),
                 ),
-                const SizedBox(height: 16),
+                const SizedBox(height: 8),
+                _buildPitchSlider(context, () => setModalState(() {})),
+                const SizedBox(height: 8),
                 // Raccourcis par famille de langue (+ "Hors ligne")
                 SizedBox(
                   height: 36,
@@ -2272,7 +3031,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                         onPressed: () {
                           final targetLang = f == 'Hors ligne'
                               ? groups.keys.firstWhere((lang) => lang.contains('hors ligne'))
-                              : groups.keys.firstWhere((lang) => _languageFamily(lang) == f);
+                              : f == 'IA locale'
+                                  ? groups.keys.firstWhere((lang) => lang.contains('IA locale'))
+                                  : groups.keys.firstWhere((lang) => _languageFamily(lang) == f);
                           final renderObject =
                               sectionKeys[targetLang]?.currentContext?.findRenderObject();
                           // Calcul direct de l'offset cible (au lieu de
@@ -2333,7 +3094,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                   Icon(Icons.hd_rounded, size: 15, color: Colors.grey.shade600),
                                   const SizedBox(width: 4),
                                   Text(
-                                    'Haute qualité — sans surlignage mot par mot',
+                                    AppLocalizations.of(context)!.reader_highQualityNoWordHighlight,
                                     style: Theme.of(context).textTheme.labelSmall?.copyWith(
                                           color: Colors.grey.shade600,
                                           fontStyle: FontStyle.italic,
@@ -2448,17 +3209,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
   void _showAppearancePanel() {
     final settings = Hive.box('settings');
 
-    // Polices système Android disponibles sans package externe
-    const fonts = [
-      (label: 'Roboto',      value: null,                  preview: 'Aa'),
-      (label: 'Serif',       value: 'serif',               preview: 'Aa'),
-      (label: 'Condensé',    value: 'sans-serif-condensed', preview: 'Aa'),
-      (label: 'Light',       value: 'sans-serif-light',    preview: 'Aa'),
-      (label: 'Medium',      value: 'sans-serif-medium',   preview: 'Aa'),
-      (label: 'Mono',        value: 'monospace',           preview: 'Aa'),
-      (label: 'Cursif',      value: 'cursive',             preview: 'Aa'),
-    ];
-
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -2467,9 +3217,23 @@ class _ReaderScreenState extends State<ReaderScreen> {
       ),
       builder: (context) => StatefulBuilder(
         builder: (context, setModalState) {
+          final l10n = AppLocalizations.of(context)!;
+          // Polices système Android disponibles sans package externe
+          final fonts = [
+            (label: 'Roboto',            value: null,                   preview: 'Aa'),
+            (label: 'Serif',             value: 'serif',                preview: 'Aa'),
+            (label: l10n.reader_fontCondensed, value: 'sans-serif-condensed', preview: 'Aa'),
+            (label: 'Light',             value: 'sans-serif-light',     preview: 'Aa'),
+            (label: 'Medium',            value: 'sans-serif-medium',    preview: 'Aa'),
+            (label: 'Mono',              value: 'monospace',            preview: 'Aa'),
+            (label: l10n.reader_fontCursive,   value: 'cursive',              preview: 'Aa'),
+          ];
           // Padding pour la barre Samsung
           final bottomPad = MediaQuery.of(context).padding.bottom + 24;
-          return Padding(
+          // Défilable : avec la couleur de page et le mode livre, le panneau
+          // peut dépasser la hauteur de l'écran (petit écran, grand texte).
+          return SingleChildScrollView(
+            child: Padding(
             padding: EdgeInsets.fromLTRB(24, 24, 24, bottomPad),
             child: Column(
               mainAxisSize: MainAxisSize.min,
@@ -2487,20 +3251,20 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   ),
                 ),
 
-                Text('Apparence',
+                Text(l10n.profileScreen_appearance,
                     style: Theme.of(context).textTheme.titleLarge?.copyWith(
                         fontWeight: FontWeight.bold)),
                 const SizedBox(height: 24),
 
                 // ── Fond ──────────────────────────────────────────────────
-                Text('FOND', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_background, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<ThemeMode>(
                   valueListenable: themeModeNotifier,
                   builder: (context, themeMode, _) => Row(
                     children: [
-                      _themeChip(context: context, label: 'Clair',
+                      _themeChip(context: context, label: l10n.profileScreen_light,
                           icon: Icons.light_mode,
                           selected: themeMode == ThemeMode.light,
                           onTap: () {
@@ -2509,7 +3273,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             setModalState(() {});
                           }),
                       const SizedBox(width: 10),
-                      _themeChip(context: context, label: 'Sombre',
+                      _themeChip(context: context, label: l10n.profileScreen_dark,
                           icon: Icons.dark_mode,
                           selected: themeMode == ThemeMode.dark,
                           onTap: () {
@@ -2518,7 +3282,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             setModalState(() {});
                           }),
                       const SizedBox(width: 10),
-                      _themeChip(context: context, label: 'Système',
+                      _themeChip(context: context, label: l10n.profileScreen_system,
                           icon: Icons.brightness_auto,
                           selected: themeMode == ThemeMode.system,
                           onTap: () {
@@ -2529,10 +3293,61 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ],
                   ),
                 ),
-                const SizedBox(height: 28),
+                const SizedBox(height: 24),
+
+                // ── Couleur de page, filtre chaud, assombrissement ────────
+                Text(l10n.reader_pageColor, style: Theme.of(context).textTheme.labelSmall
+                    ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
+                const SizedBox(height: 10),
+                ValueListenableBuilder<String>(
+                  valueListenable: pageThemeNotifier,
+                  builder: (context, current, _) => _pageColorPicker(context, current, (id) {
+                    pageThemeNotifier.value = id;
+                    settings.put('pageTheme', id);
+                    setModalState(() {});
+                  }),
+                ),
+                const SizedBox(height: 16),
+                _comfortSlider(context, Icons.wb_twilight_rounded, l10n.reader_warmth,
+                    warmthNotifier, 'warmth'),
+                _comfortSlider(context, Icons.brightness_low_rounded, l10n.reader_dim,
+                    dimNotifier, 'dim'),
+                const SizedBox(height: 16),
+
+                // ── Mode livre et animation de page ───────────────────────
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.auto_stories_rounded),
+                  title: Text(l10n.reader_bookMode),
+                  value: _bookMode,
+                  onChanged: (v) {
+                    _setBookMode(v);
+                    setModalState(() {});
+                  },
+                ),
+                if (_bookMode) ...[
+                  Text(l10n.reader_pageTurn, style: const TextStyle(fontSize: 13)),
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    width: double.infinity,
+                    child: SegmentedButton<PageTurnStyle>(
+                      segments: [
+                        ButtonSegment(value: PageTurnStyle.curl, label: Text(l10n.reader_pageTurnCurl)),
+                        ButtonSegment(value: PageTurnStyle.slide, label: Text(l10n.reader_pageTurnSlide)),
+                      ],
+                      selected: {_pageTurnStyle},
+                      showSelectedIcon: false,
+                      onSelectionChanged: (sel) {
+                        _setPageTurnStyle(sel.first);
+                        setModalState(() {});
+                      },
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
 
                 // ── Taille du texte ───────────────────────────────────────
-                Text('TAILLE DU TEXTE', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_textSizeSection, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<double>(
@@ -2558,7 +3373,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       Expanded(
                         child: Center(
                           child: Text(
-                            '${fontSize.toInt()} pt',
+                            l10n.profileScreen_pt(fontSize.toInt()),
                             style: TextStyle(fontSize: fontSize.clamp(12, 22), fontWeight: FontWeight.w500),
                           ),
                         ),
@@ -2584,7 +3399,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 const SizedBox(height: 28),
 
                 // ── Police ────────────────────────────────────────────────
-                Text('POLICE', style: Theme.of(context).textTheme.labelSmall
+                Text(l10n.reader_fontSection, style: Theme.of(context).textTheme.labelSmall
                     ?.copyWith(color: Colors.grey, letterSpacing: 1.2)),
                 const SizedBox(height: 10),
                 ValueListenableBuilder<String?>(
@@ -2642,8 +3457,86 @@ class _ReaderScreenState extends State<ReaderScreen> {
                 ),
               ],
             ),
+          ),
           );
         },
+      ),
+    );
+  }
+
+  /// Pastilles de couleur de page (Auto, Blanc, Papier, Vert, Gris, Nuit).
+  Widget _pageColorPicker(BuildContext context, String current, ValueChanged<String> onPick) {
+    final l10n = AppLocalizations.of(context)!;
+    final labels = {
+      'auto': l10n.reader_pageAuto,
+      'white': l10n.reader_pageWhite,
+      'paper': l10n.reader_pagePaper,
+      'green': l10n.reader_pageGreen,
+      'gray': l10n.reader_pageGray,
+      'night': l10n.reader_pageNight,
+    };
+    final scheme = Theme.of(context).colorScheme;
+    Widget swatch(String id, Color bg, Color fg) {
+      final selected = id == current;
+      return Expanded(
+        child: GestureDetector(
+          onTap: () => onPick(id),
+          child: Column(
+            children: [
+              Container(
+                height: 44,
+                margin: const EdgeInsets.symmetric(horizontal: 3),
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  color: bg,
+                  gradient: id == 'auto'
+                      ? const LinearGradient(
+                          colors: [Colors.white, Colors.white, Colors.black, Colors.black],
+                          stops: [0, 0.5, 0.5, 1],
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight)
+                      : null,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: selected ? scheme.primary : Colors.grey.withValues(alpha: 0.4),
+                    width: selected ? 2.5 : 1,
+                  ),
+                ),
+                child: id == 'auto'
+                    ? null
+                    : Text('Aa', style: TextStyle(color: fg, fontWeight: FontWeight.w600)),
+              ),
+              const SizedBox(height: 4),
+              Text(labels[id]!, style: const TextStyle(fontSize: 11), overflow: TextOverflow.ellipsis),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Row(children: [
+      swatch('auto', Colors.white, Colors.black),
+      for (final t in pageThemes) swatch(t.id, t.background, t.text),
+    ]);
+  }
+
+  Widget _comfortSlider(BuildContext context, IconData icon, String label,
+      ValueNotifier<double> notifier, String key) {
+    return ValueListenableBuilder<double>(
+      valueListenable: notifier,
+      builder: (context, v, _) => Row(
+        children: [
+          Icon(icon, size: 20, color: Colors.grey),
+          const SizedBox(width: 8),
+          SizedBox(width: 92, child: Text(label, style: const TextStyle(fontSize: 13))),
+          Expanded(
+            child: Slider(
+              value: v,
+              onChanged: (x) => notifier.value = x,
+              onChangeEnd: (x) => Hive.box('settings').put(key, x),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2687,25 +3580,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
   // ─── Table des matières ───────────────────────────────────────────────────
 
   Future<void> _renameFile() async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController(text: widget.ebook.title);
     final result = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Renommer le fichier'),
+        title: Text(l10n.reader_renameFileTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
-          decoration: const InputDecoration(hintText: 'Nom du document'),
+          decoration: InputDecoration(hintText: l10n.reader_documentNameHint),
           onSubmitted: (v) => Navigator.pop(ctx, v.trim()),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Renommer'),
+            child: Text(l10n.home_rename),
           ),
         ],
       ),
@@ -2727,6 +3621,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
       builder: (context) {
         String query = '';
         return StatefulBuilder(builder: (context, setModal) {
+          final l10n = AppLocalizations.of(context)!;
           final results = query.isEmpty
               ? <_SentenceItem>[]
               : _sentences
@@ -2753,7 +3648,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   child: TextField(
                     autofocus: true,
                     decoration: InputDecoration(
-                      hintText: 'Rechercher dans le document…',
+                      hintText: l10n.reader_searchHint,
                       prefixIcon: const Icon(Icons.search_rounded),
                       suffixIcon: query.isNotEmpty
                           ? IconButton(
@@ -2772,7 +3667,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   Padding(
                     padding: const EdgeInsets.only(bottom: 4),
                     child: Text(
-                      '${results.length} résultat${results.length == 1 ? '' : 's'}',
+                      l10n.reader_resultCount(results.length),
                       style: TextStyle(fontSize: 12, color: Colors.grey[600]),
                     ),
                   ),
@@ -2812,7 +3707,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 ),
                               ),
                         subtitle: Text(
-                          'Chapitre ${s.chapterIndex + 1} · Phrase ${s.globalIndex + 1}',
+                          l10n.reader_chapterSentence(s.chapterIndex + 1, s.globalIndex + 1),
                           style: const TextStyle(fontSize: 11),
                         ),
                         onTap: () {
@@ -2862,7 +3757,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
             ),
             Padding(
               padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
-              child: Text('Table des matières',
+              child: Text(AppLocalizations.of(context)!.reader_tableOfContents,
                   style: Theme.of(context).textTheme.titleMedium),
             ),
             const Divider(height: 1),
@@ -2890,7 +3785,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                             fontWeight: isCurrent
                                 ? FontWeight.bold
                                 : FontWeight.normal)),
-                    subtitle: Text('${chapter.wordCount} mots'),
+                    subtitle: Text(AppLocalizations.of(context)!.reader_wordCount(chapter.wordCount)),
                     trailing: isCurrent
                         ? Icon(Icons.volume_up,
                             color: Theme.of(context).colorScheme.primary,
@@ -2926,6 +3821,19 @@ class _ReaderScreenState extends State<ReaderScreen> {
 
   @override
   Widget build(BuildContext context) {
+    // Couleur de page (Papier, Nuit…) : tout le lecteur — texte, barres,
+    // lecteur audio — prend les couleurs de la page choisie.
+    return ValueListenableBuilder<String>(
+      valueListenable: pageThemeNotifier,
+      builder: (context, pageTheme, _) => Theme(
+        data: readerThemeData(Theme.of(context), pageTheme),
+        child: Builder(builder: _buildReader),
+      ),
+    );
+  }
+
+  Widget _buildReader(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     return Scaffold(
       appBar: _readerVisible
           ? AppBar(
@@ -2933,7 +3841,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
         actions: [
           IconButton(
             icon: const Icon(Icons.menu_book_rounded),
-            tooltip: 'Langue du dictionnaire',
+            tooltip: l10n.profileScreen_dictionaryLanguage,
             onPressed: _showDictionaryLanguagePanel,
           ),
           IconButton(
@@ -2941,17 +3849,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
               Icons.translate_rounded,
               color: _translationModeEnabled ? Theme.of(context).colorScheme.primary : null,
             ),
-            tooltip: 'Traduction en direct',
+            tooltip: l10n.reader_liveTranslationTitle,
             onPressed: _showTranslationPanel,
           ),
           IconButton(
             icon: const Icon(Icons.format_size_rounded),
-            tooltip: 'Apparence',
+            tooltip: l10n.profileScreen_appearance,
             onPressed: _showAppearancePanel,
           ),
           PopupMenuButton<String>(
             icon: const Icon(Icons.more_vert_rounded),
-            tooltip: 'Options',
+            tooltip: l10n.reader_options,
             onSelected: (value) {
               switch (value) {
                 case 'toc':
@@ -2964,6 +3872,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   setState(() => _readerVisible = !_readerVisible);
                 case 'autoscroll':
                   setState(() => _autoScrollEnabled = !_autoScrollEnabled);
+                case 'bookmode':
+                  _setBookMode(!_bookMode);
                 case 'annotations':
                   Navigator.push(
                     context,
@@ -2974,35 +3884,35 @@ class _ReaderScreenState extends State<ReaderScreen> {
               }
             },
             itemBuilder: (context) => [
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'toc',
                 child: ListTile(
-                  leading: Icon(Icons.list_alt_rounded),
-                  title: Text('Table des matières'),
+                  leading: const Icon(Icons.list_alt_rounded),
+                  title: Text(l10n.reader_tableOfContents),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'annotations',
                 child: ListTile(
-                  leading: Icon(Icons.border_color_rounded),
-                  title: Text('Annotations de ce livre'),
+                  leading: const Icon(Icons.border_color_rounded),
+                  title: Text(l10n.reader_annotationsOfThisBook),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'search',
                 child: ListTile(
-                  leading: Icon(Icons.search_rounded),
-                  title: Text('Rechercher'),
+                  leading: const Icon(Icons.search_rounded),
+                  title: Text(l10n.reader_search),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
-              const PopupMenuItem(
+              PopupMenuItem(
                 value: 'rename',
                 child: ListTile(
-                  leading: Icon(Icons.drive_file_rename_outline_rounded),
-                  title: Text('Renommer le fichier'),
+                  leading: const Icon(Icons.drive_file_rename_outline_rounded),
+                  title: Text(l10n.reader_renameFileTitle),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3013,7 +3923,17 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ? Icons.visibility_off_rounded
                       : Icons.visibility_rounded),
                   title: Text(
-                      _readerVisible ? 'Masquer le lecteur' : 'Afficher le lecteur'),
+                      _readerVisible ? l10n.reader_hideReader : l10n.reader_showReader),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: 'bookmode',
+                child: ListTile(
+                  leading: Icon(_bookMode
+                      ? Icons.view_day_rounded
+                      : Icons.auto_stories_rounded),
+                  title: Text(_bookMode ? l10n.reader_scrollMode : l10n.reader_bookMode),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3024,8 +3944,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       ? Icons.sync_disabled_rounded
                       : Icons.sync_rounded),
                   title: Text(_autoScrollEnabled
-                      ? 'Désactiver défilement auto'
-                      : 'Activer défilement auto'),
+                      ? l10n.reader_disableAutoScroll
+                      : l10n.reader_enableAutoScroll),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),
@@ -3036,19 +3956,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
           : null,
       floatingActionButton: _readerVisible
           ? null
+          // Lecteur masqué : œil ouvert en bas à droite pour le réafficher.
           : FloatingActionButton.small(
               onPressed: () => setState(() => _readerVisible = true),
-              tooltip: 'Afficher les contrôles',
-              backgroundColor: Colors.black45,
-              child: const Icon(Icons.tune_rounded, color: Colors.white, size: 18),
+              tooltip: l10n.reader_showReader,
+              backgroundColor: Colors.black54,
+              child: const Icon(Icons.visibility_rounded, color: Colors.white, size: 20),
             ),
-      floatingActionButtonLocation: FloatingActionButtonLocation.miniEndTop,
+      floatingActionButtonLocation: FloatingActionButtonLocation.miniEndFloat,
       body: Column(
         children: [
           // ── Texte + bouton de retour ─────────────────────────────────────
           Expanded(
             child: Stack(
               children: [
+                if (_bookMode) _buildBookView(context) else
                 ValueListenableBuilder<double>(
                   valueListenable: fontSizeNotifier,
                   builder: (context, fontSize, _) => ValueListenableBuilder<String?>(
@@ -3096,28 +4018,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     final item = _displayItems[index];
 
                     if (item is _ChapterHeader) {
-                      return Padding(
-                        key: ValueKey('h_${item.chapterIndex}'),
-                        padding: EdgeInsets.only(
-                          top: item.chapterIndex == 0 ? 0 : 32,
-                          bottom: 12,
-                        ),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            if (item.chapterIndex > 0)
-                              Divider(color: Colors.grey[300], height: 1),
-                            const SizedBox(height: 12),
-                            Text(
-                              item.title,
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .titleLarge
-                                  ?.copyWith(fontWeight: FontWeight.bold),
-                            ),
-                          ],
-                        ),
-                      );
+                      return _buildChapterHeader(context, item);
                     }
 
                     final para = item as _ParagraphItem;
@@ -3293,13 +4194,16 @@ class _ReaderScreenState extends State<ReaderScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
+                          // Espace symétrique de celui de l'œil à droite :
+                          // les contrôles restent centrés.
+                          const Expanded(child: SizedBox()),
                           IconButton(
                             onPressed: _currentGlobalIndex > 0 && !_isSynthesizing
                                 ? () => audioHandler?.playSentenceAt(_currentGlobalIndex - 1)
                                 : null,
                             icon: const Icon(Icons.skip_previous_rounded),
                             iconSize: 36,
-                            tooltip: 'Phrase précédente',
+                            tooltip: AppLocalizations.of(context)!.reader_previousSentence,
                           ),
                           const SizedBox(width: 8),
                           Container(
@@ -3327,7 +4231,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                             color: Colors.white,
                                           ),
                                     iconSize: 36,
-                                    tooltip: _wantsToPlay ? 'Pause' : 'Lecture',
+                                    tooltip: _wantsToPlay
+                                        ? AppLocalizations.of(context)!.reader_pause
+                                        : AppLocalizations.of(context)!.reader_play,
                                   ),
                           ),
                           const SizedBox(width: 8),
@@ -3338,7 +4244,21 @@ class _ReaderScreenState extends State<ReaderScreen> {
                                 : null,
                             icon: const Icon(Icons.skip_next_rounded),
                             iconSize: 36,
-                            tooltip: 'Phrase suivante',
+                            tooltip: AppLocalizations.of(context)!.reader_nextSentence,
+                          ),
+                          // Masquer le lecteur : centré entre « phrase
+                          // suivante » et le bouton de vitesse.
+                          Expanded(
+                            child: Center(
+                              child: IconButton(
+                                onPressed: () => setState(() => _readerVisible = false),
+                                icon: const Icon(Icons.visibility_off_rounded),
+                                iconSize: 24,
+                                visualDensity: VisualDensity.compact,
+                                color: Theme.of(context).colorScheme.primary,
+                                tooltip: AppLocalizations.of(context)!.reader_hideReader,
+                              ),
+                            ),
                           ),
                         ],
                       ),
@@ -3382,7 +4302,6 @@ class _ReaderScreenState extends State<ReaderScreen> {
       _readingStopwatch.stop();
       _flushReadingTime();
     }
-    _ttsService.cancel();
     audioHandler?.currentIndexNotifier.removeListener(_onHandlerIndexChanged);
     audioHandler?.isSynthesizingNotifier.removeListener(_onHandlerSynthesizingChanged);
     audioHandler?.shouldBePlayingNotifier.removeListener(_onHandlerWantsToPlayChanged);

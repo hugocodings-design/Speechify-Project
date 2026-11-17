@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
@@ -5,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'l10n/generated/app_localizations.dart';
 import 'models/ebook.dart';
 import 'models/chapter.dart';
 import 'models/audio_chunk.dart';
@@ -13,6 +15,9 @@ import 'models/annotation.dart';
 import 'models/dictionary_entry.dart';
 import 'models/translation_entry.dart';
 import 'screens/main_screen.dart';
+import 'services/llm_selftest.dart';
+import 'services/pc_boost_service.dart';
+import 'services/reading_theme.dart';
 import 'services/talktome_audio_handler.dart';
 
 // Préférences globales accessibles partout dans l'app
@@ -20,11 +25,9 @@ final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.syste
 final ValueNotifier<String?> fontFamilyNotifier = ValueNotifier(null);
 final ValueNotifier<double> fontSizeNotifier = ValueNotifier(16.0);
 
-/// Marge (en px) ajoutée au-dessus et au-dessous du texte en mode "texte
-/// seul" (quand on masque le lecteur avec l'œil, pendant la lecture) —
-/// réglable dans Profil > Texte. Toujours peinte dans la couleur de fond du
-/// thème actuel (clair/sombre/système) puisqu'il s'agit juste de padding sur
-/// le Scaffold, jamais d'une couleur fixe noire/blanche.
+/// Marge (en px) au-dessus et au-dessous du texte en mode livre, et en
+/// défilement quand on masque le lecteur avec l'œil — réglable dans Profil >
+/// Texte. Simple padding : prend la couleur du thème de lecture choisi.
 final ValueNotifier<double> readerMarginNotifier = ValueNotifier(32.0);
 
 /// Langue dans laquelle Gemini rédige les définitions du dictionnaire.
@@ -38,6 +41,13 @@ final ValueNotifier<String> dictionaryLanguageNotifier = ValueNotifier('fr');
 /// Cloud Translation) — voir dictionaryLanguageNotifier ci-dessus pour la
 /// raison de la séparation.
 final ValueNotifier<String> translationLanguageNotifier = ValueNotifier('fr');
+
+/// Langue de l'INTERFACE (menus, boutons, dialogues) — distincte de
+/// dictionaryLanguageNotifier/translationLanguageNotifier ci-dessus, qui
+/// contrôlent le contenu généré (définitions, traductions), pas l'UI.
+/// null = suit la langue du téléphone (comportement par défaut au premier
+/// lancement).
+final ValueNotifier<Locale?> appLocaleNotifier = ValueNotifier(null);
 
 // Handler audio global pour la notification de lecture en arrière-plan
 TalkTomeAudioHandler? audioHandler;
@@ -146,8 +156,24 @@ void main() async {
       settings.get('dictionaryLanguage', defaultValue: 'fr') as String;
   translationLanguageNotifier.value =
       settings.get('translationLanguage', defaultValue: 'fr') as String;
+  final savedAppLanguage = settings.get('appLanguage') as String?; // absent = système
+  appLocaleNotifier.value = savedAppLanguage != null ? Locale(savedAppLanguage) : null;
+  pageThemeNotifier.value = settings.get('pageTheme', defaultValue: 'auto') as String;
+  warmthNotifier.value = (settings.get('warmth', defaultValue: 0.0) as num).toDouble();
+  dimNotifier.value = (settings.get('dim', defaultValue: 0.0) as num).toDouble();
+
+  // TalkTome Boost : appairage déposé par adb (développement), puis
+  // recherche de l'ordinateur en arrière-plan.
+  await PcBoostService.instance.importPairingFileIfAny();
+  if (PcBoostService.instance.enabled) {
+    unawaited(PcBoostService.instance.base(force: true));
+  }
 
   runApp(const TalkTomeApp());
+
+  // Debug uniquement, et seulement si un fichier déclencheur a été déposé
+  // via adb — voir llm_selftest.dart.
+  unawaited(runLlmSelfTestIfRequested());
 }
 
 /// Les couvertures sont enregistrées avec un chemin absolu, qui contient
@@ -264,25 +290,39 @@ class _TalkTomeAppState extends State<TalkTomeApp> {
     return ValueListenableBuilder<ThemeMode>(
       valueListenable: themeModeNotifier,
       builder: (context, themeMode, _) {
-        return MaterialApp(
-          title: 'TalkTome',
-          debugShowCheckedModeBanner: false,
-          theme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.blue,
-              brightness: Brightness.light,
-            ),
-          ),
-          darkTheme: ThemeData(
-            useMaterial3: true,
-            colorScheme: ColorScheme.fromSeed(
-              seedColor: Colors.blue,
-              brightness: Brightness.dark,
-            ),
-          ),
-          themeMode: themeMode,
-          home: const MainScreen(),
+        return ValueListenableBuilder<Locale?>(
+          valueListenable: appLocaleNotifier,
+          builder: (context, appLocale, _) {
+            return MaterialApp(
+              title: 'TalkTome',
+              debugShowCheckedModeBanner: false,
+              theme: ThemeData(
+                useMaterial3: true,
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.blue,
+                  brightness: Brightness.light,
+                ),
+              ),
+              darkTheme: ThemeData(
+                useMaterial3: true,
+                colorScheme: ColorScheme.fromSeed(
+                  seedColor: Colors.blue,
+                  brightness: Brightness.dark,
+                ),
+              ),
+              themeMode: themeMode,
+              locale: appLocale,
+              // Français en premier : langue de repli si celle du téléphone
+              // n'est ni le français ni l'anglais (l'ordre de la liste
+              // générée par AppLocalizations est alphabétique — 'en' avant
+              // 'fr' — donc explicite ici plutôt que réutilisée telle quelle).
+              supportedLocales: const [Locale('fr'), Locale('en')],
+              localizationsDelegates: AppLocalizations.localizationsDelegates,
+              // Filtre chaud / assombrissement sur toute l'app.
+              builder: (context, child) => ComfortFilter(child: child!),
+              home: const MainScreen(),
+            );
+          },
         );
       },
     );

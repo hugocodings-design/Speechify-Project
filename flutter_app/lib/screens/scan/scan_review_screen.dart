@@ -3,6 +3,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
+import '../../l10n/generated/app_localizations.dart';
 import '../../models/ebook.dart';
 import '../../models/scan_page.dart';
 import '../../services/image_processing_service.dart';
@@ -33,11 +34,12 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
   }
 
   Future<void> _editText(ScanPage page) async {
+    final l10n = AppLocalizations.of(context)!;
     final controller = TextEditingController(text: page.recognizedText ?? '');
     final saved = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Corriger le texte'),
+        title: Text(l10n.scanReview_correctText),
         content: SizedBox(
           width: double.maxFinite,
           child: TextField(
@@ -49,11 +51,11 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx, false),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, true),
-            child: const Text('Enregistrer'),
+            child: Text(l10n.common_save),
           ),
         ],
       ),
@@ -63,17 +65,18 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
         page.recognizedText = controller.text;
         page.status =
             controller.text.trim().isEmpty ? ScanStatus.failed : ScanStatus.done;
-        page.error = controller.text.trim().isEmpty ? 'Aucun texte' : null;
+        page.error = controller.text.trim().isEmpty ? l10n.scanReview_noTextFound : null;
       });
     }
   }
 
   Future<void> _createBook() async {
+    final l10n = AppLocalizations.of(context)!;
     final usable = widget.pages.where((p) => p.hasText).toList();
     if (usable.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Aucune page ne contient de texte reconnu.'),
+        SnackBar(
+          content: Text(l10n.scanReview_noPagesWithText),
           backgroundColor: Colors.red,
         ),
       );
@@ -81,14 +84,15 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
     }
 
     final now = DateTime.now();
+    final dateStr = '${now.day.toString().padLeft(2, '0')}/'
+        '${now.month.toString().padLeft(2, '0')}/${now.year}';
     final controller = TextEditingController(
-      text: 'Scan du ${now.day.toString().padLeft(2, '0')}/'
-          '${now.month.toString().padLeft(2, '0')}/${now.year}',
+      text: l10n.scanReview_defaultTitle(dateStr),
     );
     final title = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('Titre du livre'),
+        title: Text(l10n.scanReview_bookTitle),
         content: TextField(
           controller: controller,
           autofocus: true,
@@ -97,11 +101,11 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('Annuler'),
+            child: Text(l10n.common_cancel),
           ),
           TextButton(
             onPressed: () => Navigator.pop(ctx, controller.text.trim()),
-            child: const Text('Créer'),
+            child: Text(l10n.scanReview_create),
           ),
         ],
       ),
@@ -147,7 +151,7 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
       setState(() => _busy = false);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text('Création impossible : $e'),
+          content: Text(l10n.scanReview_creationFailed('$e')),
           backgroundColor: Colors.red,
         ),
       );
@@ -156,18 +160,19 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = AppLocalizations.of(context)!;
     final totalWords =
         widget.pages.fold<int>(0, (sum, p) => sum + p.wordCount);
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Vérifier les pages'),
+        title: Text(l10n.scanReview_verifyPages),
         bottom: PreferredSize(
           preferredSize: const Size.fromHeight(28),
           child: Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: Text(
-              '${widget.pages.length} page(s) • $totalWords mots reconnus',
+              l10n.scanReview_pagesWordsSummary(widget.pages.length, totalWords),
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -203,7 +208,7 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
           child: FilledButton.icon(
             onPressed: _busy ? null : _createBook,
             icon: const Icon(Icons.auto_stories),
-            label: const Text('Créer le livre'),
+            label: Text(l10n.scanReview_createBook),
           ),
         ),
       ),
@@ -211,6 +216,7 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
   }
 
   Widget _buildTile(ScanPage page, int index) {
+    final l10n = AppLocalizations.of(context)!;
     final path = page.rectifiedPath ?? page.sourcePath;
     final preview = (page.recognizedText ?? '').replaceAll('\n', ' ').trim();
 
@@ -228,11 +234,11 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
             gaplessPlayback: true,
           ),
         ),
-        title: Text('Page ${index + 1} • ${page.wordCount} mots'),
+        title: Text(l10n.scanReview_pageWordCount(index + 1, page.wordCount)),
         subtitle: Text(
           page.hasText
               ? (preview.length > 90 ? '${preview.substring(0, 90)}…' : preview)
-              : (page.error ?? 'Aucun texte reconnu'),
+              : (page.error ?? l10n.crop_noTextRecognized),
           maxLines: 2,
           overflow: TextOverflow.ellipsis,
           style: page.hasText ? null : const TextStyle(color: Colors.red),
@@ -243,12 +249,12 @@ class _ScanReviewScreenState extends State<ScanReviewScreen> {
           children: [
             IconButton(
               icon: const Icon(Icons.crop),
-              tooltip: 'Recadrer',
+              tooltip: l10n.scanReview_recrop,
               onPressed: _busy ? null : () => _recrop(page),
             ),
             IconButton(
               icon: const Icon(Icons.delete_outline, color: Colors.red),
-              tooltip: 'Supprimer',
+              tooltip: l10n.common_delete,
               onPressed: _busy
                   ? null
                   : () => setState(() => widget.pages.remove(page)),

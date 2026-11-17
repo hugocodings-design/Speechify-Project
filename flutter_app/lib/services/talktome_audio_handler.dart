@@ -1,28 +1,60 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 import 'package:audio_service/audio_service.dart';
+import 'package:hive_flutter/hive_flutter.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:flutter/foundation.dart';
-import 'package:path_provider/path_provider.dart';
-import 'tts_service.dart';
-import 'local_tts_service.dart';
-import 'google_tts_direct_service.dart';
+import 'package:flutter/widgets.dart' show Locale;
+import '../l10n/generated/app_localizations.dart';
+import '../main.dart' show appLocaleNotifier;
+import 'local_llm_service.dart';
+import 'sherpa_tts_service.dart';
+import 'tts_audio_cache.dart';
 import '../models/word_timing.dart';
 
-/// Gère la session média Android (foreground service + notification de lecture).
-/// Contient la boucle complète de synthèse + lecture pour que tout fonctionne
-/// en arrière-plan sans être throttlé par Android.
+/// Résout la langue actuelle de l'app (préférence utilisateur, sinon système,
+/// sinon français par défaut) sans BuildContext — ce handler est un singleton
+/// hors de l'arbre de widgets, donc ne peut pas utiliser AppLocalizations.of().
+AppLocalizations _currentL10n() {
+  final preferred = appLocaleNotifier.value;
+  if (preferred != null) return lookupAppLocalizations(preferred);
+  final systemLocale = PlatformDispatcher.instance.locale;
+  const supported = [Locale('fr'), Locale('en')];
+  final match = supported.firstWhere(
+    (l) => l.languageCode == systemLocale.languageCode,
+    orElse: () => const Locale('fr'),
+  );
+  return lookupAppLocalizations(match);
+}
+
+/// Gère la session média Android (foreground service + notification de lecture)
+/// et toute la chaîne synthèse IA locale → lecture, pour que tout fonctionne
+/// en arrière-plan.
+///
+/// Chargement : une boucle unique (le moteur local ne traite qu'une phrase
+/// à la fois) synthétise en continu les phrases à venir, en priorité celle
+/// qu'on attend, jusqu'à avoir [_targetSecondsAhead] secondes d'audio
+/// d'avance. La synthèse se fait directement à la vitesse choisie : à 1,5×
+/// le moteur produit un audio plus court, donc l'avance se constitue aussi
+/// vite qu'à 1×, et le son reste naturel (pas d'accélération après coup).
 class TalkTomeAudioHandler extends BaseAudioHandler {
   static TalkTomeAudioHandler? _instance;
   static TalkTomeAudioHandler? get instance => _instance;
 
-  // Double-buffer : deux lecteurs pour transitions instantanées entre phrases
+  /// Avance visée (secondes d'écoute) et plafond en nombre de phrases.
+  static const double _targetSecondsAhead = 180;
+  static const int _maxSentencesAhead = 80;
+
+  // Double-buffer : deux lecteurs pour des transitions instantanées.
   final List<AudioPlayer> _players = [AudioPlayer(), AudioPlayer()];
   int _currentIdx = 0;
-
   AudioPlayer get _currentPlayer => _players[_currentIdx];
-  AudioPlayer get _bufferPlayer  => _players[1 - _currentIdx];
+  AudioPlayer get _bufferPlayer => _players[1 - _currentIdx];
+
+  /// Phrase chargée dans chaque lecteur (null = rien de valable).
+  int? _currentLoadedIndex;
+  TtsClip? _currentClip;
+  int? _bufferIndex;
+  TtsClip? _bufferClip;
 
   // ── État de session ────────────────────────────────────────────────────────
 
@@ -30,116 +62,76 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
   String _bookTitle = '';
   int _currentIndex = 0;
 
-  /// Id du livre (Hive) en cours de lecture — utilisé par le mini-lecteur
-  /// affiché en bas de l'app pour retrouver l'Ebook complet (couverture,
-  /// nombre de mots) et y naviguer d'un tap, peu importe l'écran affiché.
+  /// Id du livre (Hive) en cours de lecture — pour le mini-lecteur.
   final ValueNotifier<String?> currentEbookIdNotifier = ValueNotifier(null);
 
   String get bookTitle => _bookTitle;
   int get totalSentenceCount => _sentenceTexts.length;
   double get speed => _speed;
-  TtsService? _ttsService;
-  final GoogleTtsDirectService _googleTts = GoogleTtsDirectService();
-  final LocalTtsService _localTts = LocalTtsService();
-  String _voiceName = 'en-US-Neural2-C';
+  String get voiceName => _voiceName;
+
+  String _voiceName = 'sherpa-kokoro-af_heart';
+  // ignore: unused_field
   String _languageCode = 'en-US';
+
+  /// Vitesse d'écoute demandée (appliquée tout de suite).
   double _speed = 1.0;
+
+  /// Vitesse à laquelle on synthétise (suit [_speed] après un court délai,
+  /// pour ne pas tout régénérer à chaque cran du curseur).
+  double _synthSpeed = 1.0;
+  Timer? _speedDebounce;
+
   bool _isSessionActive = false;
   bool _isPlaying = false;
 
-  /// Vrai si la voix sélectionnée est une voix locale (moteur du téléphone,
-  /// hors ligne) plutôt qu'une voix cloud nécessitant réseau + quota API.
-  bool get _isLocalVoice => _voiceName.startsWith('local-');
+  // ── Pipeline de synthèse ────────────────────────────────────────────────
 
-  // ── Cache de pré-synthèse ──────────────────────────────────────────────────
+  final Map<int, TtsClip> _ready = {};
 
-  String? _prefetchedPath;
-  int? _prefetchedIndex;
-  List<WordTiming>? _prefetchedWords;
-  int _synthesisToken = 0;
-  int _prefetchToken = 0;
-  int? _bufferLoadedIndex;
+  /// Texte réellement prononcé pour chaque phrase prête (l'original, ou sa
+  /// traduction en mode « lire la traduction »).
+  final Map<int, String> _spoken = {};
 
-  /// Timings mot par mot (secondes depuis le début de la phrase) pour la
-  /// phrase en cours de lecture — alimente currentWordIndexNotifier.
+  /// Mode « lire la traduction » : fournit le texte à prononcer à la place
+  /// de la phrase du livre, avec une voix de la langue de traduction.
+  Future<String> Function(int index)? _textProvider;
+  String? _translationVoice;
+  bool get isReadingTranslation => _textProvider != null;
+  final Set<int> _failed = {};
+  final Map<int, Completer<TtsClip?>> _waiters = {};
+  int _generation = 0; // change de voix / de session : résultats en cours périmés
+  bool _pumping = false;
+  int _playToken = 0;
+
+  // ── Suivi mot par mot ─────────────────────────────────────────────────────
+
   List<WordTiming> _currentWordTimings = [];
   Timer? _wordTrackingTimer;
 
-  /// Cache des phrases pré-synthétisées sur disque, au-delà de celle chargée
-  /// dans le buffer (indexée par numéro de phrase, pas par "distance" — donc
-  /// aucun conflit possible quand plusieurs préchargements tournent en
-  /// parallèle). Vidé uniquement lors d'un changement de voix, puisque c'est
-  /// le seul cas où un fichier en cache devient réellement incorrect (les
-  /// autres cas — sauter en arrière, changer de phrase — laissent le contenu
-  /// déjà en cache tout à fait valable pour son propre index).
-  final Map<int, String> _prefetchCache = {};
-  final Map<int, List<WordTiming>> _prefetchWordCache = {};
-  int _voiceGeneration = 0;
-
   // ── Notifiers pour l'UI ───────────────────────────────────────────────────
 
-  /// Index de la phrase en cours — l'UI écoute ça pour le scroll et le surlignage
   final ValueNotifier<int> currentIndexNotifier = ValueNotifier(0);
-
-  /// Index du mot en cours DANS la phrase courante (-1 = aucun mot actif /
-  /// pas de timing disponible pour cette phrase). Alimente le surlignage
-  /// mot par mot, en plus du surlignage de la phrase entière.
   final ValueNotifier<int> currentWordIndexNotifier = ValueNotifier(-1);
 
-  /// Vrai pendant la synthèse TTS — l'UI affiche un spinner sur le bouton play
+  /// Texte en train d'être prononcé et mot actif DANS ce texte. Identiques
+  /// au livre en lecture normale ; en mode « lire la traduction », c'est la
+  /// traduction (affichée dans la bulle, avec son propre suivi des mots),
+  /// tandis que [currentWordIndexNotifier] suit le livre en proportion.
+  final ValueNotifier<String?> spokenTextNotifier = ValueNotifier(null);
+  final ValueNotifier<int> spokenWordIndexNotifier = ValueNotifier(-1);
+
+  /// Vrai quand on attend la synthèse de la phrase à lire (spinner).
   final ValueNotifier<bool> isSynthesizingNotifier = ValueNotifier(false);
 
-  /// Intention de l'utilisateur (jouer ou pause) — respectée même quand la
-  /// synthèse est en cours, pour qu'un pause pendant le chargement empêche
-  /// bien la lecture automatique une fois l'audio prêt. L'UI écoute ça pour
-  /// savoir quelle action déclencher au prochain tap, sans dépendre d'un
-  /// état de lecture qui peut être temporairement désynchronisé pendant
-  /// un chargement.
+  /// Intention de l'utilisateur (jouer ou pause), respectée même pendant un
+  /// chargement.
   final ValueNotifier<bool> shouldBePlayingNotifier = ValueNotifier(true);
-
-  /// Diagnostic temporaire : liste les voix TTS locales installées sur
-  /// l'appareil (visible dans les logs adb).
-  Future<void> debugListLocalVoices() => _localTts.debugListVoices();
-
-  /// Diagnostic temporaire : fait parler chaque voix candidate d'une langue
-  /// l'une après l'autre pour identifier les genres à l'oreille. Appeler
-  /// depuis main() avec les codes bruts trouvés via debugListLocalVoices().
-  Future<void> debugSpeakCandidates(
-    List<String> deviceVoiceNames,
-    String languageCode, {
-    List<String>? phrases,
-  }) =>
-      _localTts.debugSpeakCandidates(deviceVoiceNames, languageCode, phrases: phrases);
-
-  /// Diagnostic temporaire : teste les 5 voix locales françaises (France)
-  /// disponibles sur l'appareil, en annonçant chacune en français.
-  Future<void> debugSpeakFrFrCandidates() => debugSpeakCandidates(
-        const [
-          'fr-fr-x-frc-local',
-          'fr-fr-x-frb-local',
-          'fr-fr-x-fra-local',
-          'fr-fr-x-vlf-local',
-          'fr-fr-x-frd-local',
-        ],
-        'fr-FR',
-        phrases: const [
-          'Voix numéro un.',
-          'Voix numéro deux.',
-          'Voix numéro trois.',
-          'Voix numéro quatre.',
-          'Voix numéro cinq.',
-        ],
-      );
 
   TalkTomeAudioHandler() {
     _instance = this;
-    _setupPlayerListeners();
-  }
-
-  /// Écouter les deux lecteurs — réagir uniquement au lecteur courant
-  void _setupPlayerListeners() {
     for (int i = 0; i < 2; i++) {
-      final idx = i; // capture par valeur pour la closure
+      final idx = i;
       _players[idx].playerStateStream.listen((state) {
         if (idx != _currentIdx) return;
         _onPlayerStateChanged(state);
@@ -148,15 +140,12 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
   }
 
   void _onPlayerStateChanged(PlayerState state) {
-    // Phrase terminée → passer à la suivante
     if (state.processingState == ProcessingState.completed && _isPlaying) {
       _isPlaying = false;
       _onSentenceFinished();
       return;
     }
-    // Ignorer les états "completed + not playing" (transition normale)
     if (!state.playing && state.processingState == ProcessingState.completed) return;
-
     _isPlaying = state.playing;
     _updateNotification(playing: state.playing);
   }
@@ -165,7 +154,6 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
     if (_currentIndex < _sentenceTexts.length - 1) {
       _playSentence(_currentIndex + 1);
     } else {
-      // Fin du livre
       _isPlaying = false;
       isSynthesizingNotifier.value = false;
       _updateNotification(playing: false);
@@ -174,137 +162,166 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
 
   // ── Configuration de session ───────────────────────────────────────────────
 
-  /// Appeler quand on ouvre un livre. Initialise le handler pour cette session.
   void startSession({
     required List<String> sentences,
     required String bookTitle,
     required String ebookId,
-    required TtsService ttsService,
     required String voiceName,
     required String languageCode,
     required double speed,
     required int startIndex,
   }) {
-    // Annuler toute synthèse en cours avant de changer de session
-    _synthesisToken++;
-    _prefetchToken++;
-    _voiceGeneration++;
-
+    _playToken++;
     _sentenceTexts = sentences;
+    _textProvider = null;
+    _translationVoice = null;
     _bookTitle = bookTitle;
     currentEbookIdNotifier.value = ebookId;
-    _ttsService = ttsService;
     _voiceName = voiceName;
     _languageCode = languageCode;
     _speed = speed;
+    _synthSpeed = _round(speed);
     _currentIndex = startIndex;
     _isSessionActive = true;
     _isPlaying = false;
-    // Faux à l'ouverture : rien ne joue encore (seul un préchargement est
-    // lancé plus bas), donc le bouton doit afficher ▶ « prêt à jouer », pas
-    // ⏸ comme si la lecture était déjà en cours. Le mettre à `true` ici
-    // forçait l'utilisateur à appuyer sur pause puis sur play pour que la
-    // première lecture démarre réellement.
     shouldBePlayingNotifier.value = false;
     isSynthesizingNotifier.value = false;
     currentIndexNotifier.value = startIndex;
-
-    // Vider le cache de pré-synthèse
-    _prefetchedPath = null;
-    _prefetchedIndex = null;
-    _prefetchedWords = null;
-    _prefetchCache.clear();
-    _prefetchWordCache.clear();
-    _bufferLoadedIndex = null;
+    _invalidatePipeline();
     _resetWordTracking();
-
     _updateMediaItem();
     _updateNotification(playing: false);
-
-    // Précharger la phrase de départ (et la suivante) dès l'ouverture du
-    // livre : quand l'utilisateur appuie sur play pour la première fois,
-    // l'audio est déjà prêt au lieu d'attendre l'appel réseau à ce moment-là.
-    _prefetchAhead(startIndex - 1);
+    // Commence à préparer l'audio dès l'ouverture du livre.
+    _kickPump();
   }
 
-  /// Mettre à jour la voix (invalide le cache de pré-synthèse)
   void updateVoice(String voiceName, String languageCode) {
+    if (voiceName == _voiceName) {
+      _languageCode = languageCode;
+      return;
+    }
     _voiceName = voiceName;
     _languageCode = languageCode;
-    // Invalider le cache — les fichiers pré-synthétisés sont pour l'ancienne voix
-    _prefetchToken++;
-    _voiceGeneration++;
-    _prefetchedPath = null;
-    _prefetchedIndex = null;
-    _prefetchedWords = null;
-    _prefetchCache.clear();
-    _prefetchWordCache.clear();
-    _bufferLoadedIndex = null;
+    _invalidatePipeline();
+    _kickPump();
   }
 
-  /// Mettre à jour la vitesse de lecture
+  /// Active (provider non null) ou coupe le mode « lire la traduction ».
+  /// La phrase en cours est relue aussitôt dans le nouveau mode.
+  void setTranslationReading({
+    Future<String> Function(int index)? textProvider,
+    String? voiceName,
+  }) {
+    _textProvider = textProvider;
+    _translationVoice = textProvider == null ? null : voiceName;
+    _invalidatePipeline();
+    if (shouldBePlayingNotifier.value && _isSessionActive) {
+      unawaited(_playSentence(_currentIndex));
+    } else {
+      _currentLoadedIndex = null;
+      _currentClip = null;
+      _kickPump();
+    }
+  }
+
+  /// Vitesse : appliquée immédiatement à la phrase en cours (par le lecteur),
+  /// puis, une fois le curseur relâché, les phrases suivantes sont
+  /// re-synthétisées à la bonne vitesse par le moteur.
   void updateSpeed(double speed) {
     _speed = speed;
-    _players[0].setSpeed(speed);
-    _players[1].setSpeed(speed);
+    _applyPlayerSpeeds();
+    _speedDebounce?.cancel();
+    _speedDebounce = Timer(const Duration(milliseconds: 600), () {
+      final s = _round(_speed);
+      if (s == _synthSpeed) return;
+      _synthSpeed = s;
+      _kickPump();
+    });
   }
 
-  // ── Contrôles audio (BaseAudioHandler — appelés depuis la notification) ────
+  static double _round(double s) => double.parse(s.toStringAsFixed(2));
+
+  /// Chaque lecteur compense l'écart entre la vitesse voulue et celle à
+  /// laquelle son audio a été synthétisé (normalement 1,0 : aucun effet).
+  void _applyPlayerSpeeds() {
+    final c = _currentClip;
+    if (c != null) unawaited(_tune(_currentPlayer, c));
+    final b = _bufferClip;
+    if (b != null) unawaited(_tune(_bufferPlayer, b));
+  }
+
+  // ─── Timbre (plus grave / plus aigu), réglé pour chaque voix ─────────────
+
+  /// Bornes du réglage : au-delà, la voix devient caricaturale.
+  static const double pitchMin = 0.85, pitchMax = 1.15;
+
+  static double pitchFor(String voice) =>
+      (Hive.box('settings').get('pitch_$voice', defaultValue: 1.0) as num)
+          .toDouble()
+          .clamp(pitchMin, pitchMax);
+
+  /// Timbre de la voix qui parle en ce moment (celle de la traduction quand
+  /// on lit la traduction à voix haute).
+  double get _activePitch => pitchFor(_translationVoice ?? _voiceName);
+
+  /// Change le timbre de [voice] : appliqué tout de suite, même en pleine
+  /// phrase — rien à re-synthétiser, c'est le lecteur qui transforme l'audio.
+  Future<void> setVoicePitch(String voice, double pitch) async {
+    await Hive.box('settings').put('pitch_$voice', pitch.clamp(pitchMin, pitchMax));
+    _applyPlayerSpeeds();
+  }
+
+  /// Vitesse et timbre d'un lecteur pour [clip].
+  Future<void> _tune(AudioPlayer player, TtsClip clip) async {
+    await player.setSpeed(_speed / clip.speed);
+    await player.setPitch(_activePitch);
+  }
+
+  void _invalidatePipeline() {
+    _generation++;
+    _ready.clear();
+    _spoken.clear();
+    _failed.clear();
+    _bufferIndex = null;
+    _bufferClip = null;
+  }
+
+  // ── Contrôles audio ────────────────────────────────────────────────────────
 
   @override
   Future<void> play() async {
     if (!_isSessionActive) return;
     shouldBePlayingNotifier.value = true;
 
-    if (_isLocalVoice) {
-      // Le moteur natif ne sait pas reprendre au milieu d'une phrase —
-      // on relit simplement la phrase courante depuis le début.
-      await _playSentenceLocal(_currentIndex);
-      return;
-    }
-
-    // Si synthèse en cours, marquer comme "doit jouer" — _playSentence jouera automatiquement
+    // En attente de synthèse : la phrase démarrera dès qu'elle sera prête.
     if (isSynthesizingNotifier.value) {
-      _isPlaying = true;
-      _updateNotification(playing: true);
+      _updateNotification(playing: true, loading: true);
       return;
     }
-    if (_currentPlayer.duration != null) {
-      // Audio déjà chargé → reprendre la lecture. unawaited : le Future de
-      // just_audio play() ne se termine qu'à la fin de la phrase, pas à son
-      // démarrage — l'attendre ici bloquerait cette méthode jusqu'à la fin
-      // de la phrase en cours.
+    if (_currentLoadedIndex == _currentIndex && _currentClip != null) {
       unawaited(_currentPlayer.play());
       _isPlaying = true;
-      _startWordTracking(); // reprend le suivi mot par mot après une pause
+      _startWordTracking();
+      _updateNotification(playing: true);
     } else {
-      // Pas d'audio chargé → synthétiser et jouer
       await _playSentence(_currentIndex);
     }
   }
 
   @override
   Future<void> pause() async {
-    // Toujours honoré immédiatement, même pendant une synthèse en cours :
-    // empêche la lecture automatique de démarrer une fois l'audio prêt.
     shouldBePlayingNotifier.value = false;
     _isPlaying = false;
     _pauseWordTracking();
-    if (_isLocalVoice) {
-      await _localTts.stop();
-    } else {
-      await _currentPlayer.pause();
-    }
+    await _currentPlayer.pause();
     _updateNotification(playing: false);
   }
 
   @override
   Future<void> skipToNext() async {
     final next = _currentIndex + 1;
-    if (next < _sentenceTexts.length && !isSynthesizingNotifier.value) {
+    if (next < _sentenceTexts.length) {
       shouldBePlayingNotifier.value = true;
-      _currentPlayer.stop();
-      unawaited(_localTts.stop());
       await _playSentence(next);
     }
   }
@@ -312,385 +329,317 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
   @override
   Future<void> skipToPrevious() async {
     final prev = _currentIndex - 1;
-    if (prev >= 0 && !isSynthesizingNotifier.value) {
+    if (prev >= 0) {
       shouldBePlayingNotifier.value = true;
-      // Saut en arrière : invalide seulement le buffer en cours de
-      // préchargement (le cache par index reste valable pour son propre
-      // index, peu importe le sens de navigation).
-      _prefetchToken++;
-      _currentPlayer.stop();
-      unawaited(_localTts.stop());
       await _playSentence(prev);
     }
   }
 
-  /// Sauter à une phrase précise (tap sur le texte ou navigation)
+  /// Sauter à une phrase précise (tap sur le texte ou navigation).
   Future<void> playSentenceAt(int index) async {
     if (index < 0 || index >= _sentenceTexts.length) return;
-    debugPrint('[WORD-TRACK] >>> playSentenceAt($index) — tap manuel');
     shouldBePlayingNotifier.value = true;
-    // Saut arbitraire : invalide seulement le buffer en cours de
-    // préchargement (le cache par index reste valable pour son propre
-    // index, peu importe où on saute).
-    _prefetchToken++;
-    // Annule toute requête réseau en cours (tap précédent encore en train de
-    // charger, préchargement en fond) : sans ça, taper plusieurs phrases
-    // rapidement empile des requêtes concurrentes qui se disputent le même
-    // quota au lieu de laisser la place nette à celle qu'on veut vraiment.
-    _ttsService?.cancel();
-    _googleTts.cancel();
-    _currentPlayer.stop();
-    unawaited(_localTts.stop());
     await _playSentence(index);
   }
 
-  /// Positionner le curseur sans démarrer la lecture (navigation par chapitre)
+  /// Positionner le curseur sans démarrer la lecture (navigation par chapitre).
   void stopAndSeekTo(int index) {
-    _synthesisToken++;
-    _prefetchToken++;
+    _playToken++;
     _currentPlayer.stop();
     _bufferPlayer.stop();
-    unawaited(_localTts.stop());
-    _localTts.setWordBoundaryHandler(null);
+    _currentLoadedIndex = null;
+    _currentClip = null;
+    _bufferIndex = null;
+    _bufferClip = null;
     _resetWordTracking();
     _currentIndex = index;
+    currentIndexNotifier.value = index;
     _isPlaying = false;
     shouldBePlayingNotifier.value = false;
-    _bufferLoadedIndex = null;
-    _prefetchedPath = null;
-    _prefetchedIndex = null;
-    _prefetchedWords = null;
     isSynthesizingNotifier.value = false;
     _updateNotification(playing: false);
+    _kickPump();
   }
 
-  // ── Boucle de synthèse + lecture (cœur du foreground service) ─────────────
+  // ── Lecture d'une phrase ───────────────────────────────────────────────────
 
   Future<void> _playSentence(int index) async {
     if (index < 0 || index >= _sentenceTexts.length) return;
-    if (_isLocalVoice) return _playSentenceLocal(index);
-
-    _synthesisToken++;
-    final myToken = _synthesisToken;
+    final myToken = ++_playToken;
 
     _currentIndex = index;
     currentIndexNotifier.value = index;
-    isSynthesizingNotifier.value = true;
-    debugPrint('[LOAD-TRACK] phrase $index : isSynthesizing=true (token=$myToken)');
     _resetWordTracking();
-
-    // Mettre à jour la notification avec le numéro de phrase et la progression
     _updateMediaItem();
-    _updateNotification(playing: _isPlaying, loading: true);
+    _kickPump(); // repart de la nouvelle position (priorité à cette phrase)
+
+    TtsClip? clip = _ready[index];
+    if (clip == null && !_failed.contains(index)) {
+      isSynthesizingNotifier.value = true;
+      _updateNotification(playing: shouldBePlayingNotifier.value, loading: true);
+      _currentPlayer.stop();
+      clip = await _waitFor(index);
+      if (myToken != _playToken) return;
+    }
+
+    if (clip == null) {
+      // Phrase impossible à synthétiser (ex: uniquement de la ponctuation) :
+      // on passe à la suivante plutôt que de bloquer la lecture.
+      isSynthesizingNotifier.value = false;
+      debugPrint('[TTS] phrase $index ignorée (synthèse impossible)');
+      if (shouldBePlayingNotifier.value) _onSentenceFinished();
+      return;
+    }
 
     try {
-      // ── Chemin 1 : buffer pré-chargé → swap instantané ──────────────────
-      if (_bufferLoadedIndex == index) {
+      if (_bufferIndex == index && _bufferClip != null) {
+        // Déjà chargée dans le second lecteur : bascule instantanée.
         _currentPlayer.stop();
-        _swapPlayers();
-        _currentWordTimings = _prefetchedWords ?? [];
-        _prefetchedWords = null;
-        debugPrint('[WORD-TRACK] phrase $index (buffer) : ${_currentWordTimings.length} mots');
-
-        unawaited(_currentPlayer.setSpeed(_speed));
-        if (shouldBePlayingNotifier.value) {
-          unawaited(_currentPlayer.play());
-          _isPlaying = true;
-          _startWordTracking();
-        } else {
-          _isPlaying = false;
-        }
-
-        isSynthesizingNotifier.value = false;
-        debugPrint('[LOAD-TRACK] phrase $index (buffer) : isSynthesizing=false');
-        _updateNotification(playing: _isPlaying);
-        _prefetchAhead(index);
-        return;
-      }
-
-      // ── Chemin 2 : synthèse directe ──────────────────────────────────────
-      _currentPlayer.stop();
-
-      String audioPath;
-      List<WordTiming> words;
-
-      if (_prefetchedIndex == index && _prefetchedPath != null) {
-        // Fichier déjà synthétisé (niveau 1 du pipeline)
-        audioPath = _prefetchedPath!;
-        words = _prefetchedWords ?? [];
-        _prefetchedPath = null;
-        _prefetchedIndex = null;
-        _prefetchedWords = null;
-      } else if (_prefetchCache.containsKey(index)) {
-        // Fichier déjà synthétisé (cache de préchargement) — évite un appel
-        // réseau redondant quand cette phrase a déjà été pré-synthétisée
-        audioPath = _prefetchCache.remove(index)!;
-        words = _prefetchWordCache.remove(index) ?? [];
+        _currentIdx = 1 - _currentIdx;
+        _bufferIndex = null;
+        _bufferClip = null;
       } else {
-        // Invalider tout pré-chargement en cours qui ne correspond plus
-        _prefetchToken++;
-
-        final callStart = DateTime.now();
-        debugPrint('[LOAD-TRACK] phrase $index : appel réseau démarré (token=$myToken)');
-        final result = await _googleTts.synthesizeText(
-          text: _sentenceTexts[index],
-          voiceName: _voiceName,
-          languageCode: _languageCode,
-        );
-        final elapsed = DateTime.now().difference(callStart).inMilliseconds;
-        debugPrint('[LOAD-TRACK] phrase $index : appel réseau terminé en ${elapsed}ms '
-            '(token=$myToken, actuel=$_synthesisToken)');
-        if (myToken != _synthesisToken) return;
-
-        final audioBytes = base64Decode(result['audio_content'] as String);
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/sentence_$index.mp3');
-        await tempFile.writeAsBytes(audioBytes);
-        audioPath = tempFile.path;
-        words = parseWordTimings(result['word_timings']);
+        _currentPlayer.stop();
+        await _currentPlayer.setAudioSource(AudioSource.uri(Uri.file(clip.path)));
+        if (myToken != _playToken) return;
       }
+      _currentLoadedIndex = index;
+      _currentClip = clip;
+      await _tune(_currentPlayer, clip);
+      if (myToken != _playToken) return;
 
-      if (myToken != _synthesisToken) return;
-
-      _currentWordTimings = words;
-      debugPrint('[WORD-TRACK] phrase $index (direct) : ${_currentWordTimings.length} mots '
-          '(texte: ${_sentenceTexts[index].split(' ').length} mots)');
-      await _currentPlayer.setAudioSource(AudioSource.uri(Uri.file(audioPath)));
-      await _currentPlayer.setSpeed(_speed);
+      final spokenText = _spoken[index] ?? _sentenceTexts[index];
+      spokenTextNotifier.value = spokenText;
+      final words = spokenText
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .toList();
+      _currentWordTimings = clip.wordStarts.length == words.length
+          ? [for (var i = 0; i < words.length; i++) WordTiming(words[i], clip.wordStarts[i])]
+          : <WordTiming>[];
 
       if (shouldBePlayingNotifier.value) {
-        // unawaited, PAS "await" : le Future de just_audio play() ne se
-        // termine qu'à la fin de la lecture, pas à son démarrage — l'attendre
-        // ici bloquait tout (spinner, suivi mot par mot) pendant TOUTE la
-        // durée de la phrase, exactement comme le chemin buffer le fait déjà
-        // correctement plus haut.
+        // unawaited : le Future de play() ne se termine qu'à la fin de la phrase.
         unawaited(_currentPlayer.play());
         _isPlaying = true;
         _startWordTracking();
       } else {
         _isPlaying = false;
       }
-
       isSynthesizingNotifier.value = false;
-      debugPrint('[LOAD-TRACK] phrase $index (direct) : isSynthesizing=false');
       _updateNotification(playing: _isPlaying);
-      _prefetchAhead(index);
+      unawaited(_preloadBuffer());
     } catch (e) {
-      if (myToken != _synthesisToken) {
-        debugPrint('[LOAD-TRACK] phrase $index : erreur ignorée, token périmé ($myToken vs $_synthesisToken) — $e');
-        return;
-      }
-      // Annulation silencieuse (ex: changement de phrase pendant la synthèse)
-      if (e.toString().contains('cancelled')) {
-        isSynthesizingNotifier.value = false;
-        debugPrint('[LOAD-TRACK] phrase $index : annulée, isSynthesizing=false');
-        return;
-      }
+      if (myToken != _playToken) return;
       isSynthesizingNotifier.value = false;
-      debugPrint('[LOAD-TRACK] phrase $index : ❌ erreur, isSynthesizing=false — $e');
-    }
-  }
-
-  /// Lit une phrase avec le moteur TTS local du téléphone — pas de réseau,
-  /// pas de préchargement nécessaire (c'est déjà instantané localement).
-  Future<void> _playSentenceLocal(int index) async {
-    _synthesisToken++;
-    final myToken = _synthesisToken;
-
-    _currentIndex = index;
-    currentIndexNotifier.value = index;
-    isSynthesizingNotifier.value = false; // pas d'attente réseau en local
-    _resetWordTracking();
-
-    _updateMediaItem();
-
-    if (!shouldBePlayingNotifier.value) {
-      _isPlaying = false;
-      _localTts.setWordBoundaryHandler(null);
+      debugPrint('[TTS] ❌ lecture phrase $index impossible : $e');
       _updateNotification(playing: false);
-      return;
+    }
+  }
+
+  /// Charge la phrase suivante dans le second lecteur, si elle est prête.
+  Future<void> _preloadBuffer() async {
+    final next = _currentIndex + 1;
+    final clip = _ready[next];
+    if (clip == null || _bufferIndex == next) return;
+    final token = _playToken;
+    try {
+      _bufferIndex = null;
+      _bufferClip = null;
+      await _bufferPlayer.setAudioSource(AudioSource.uri(Uri.file(clip.path)));
+      await _tune(_bufferPlayer, clip);
+      if (token != _playToken || _currentIndex + 1 != next) return;
+      _bufferIndex = next;
+      _bufferClip = clip;
+    } catch (e) {
+      debugPrint('[TTS] préchargement lecteur impossible : $e');
+    }
+  }
+
+  Future<TtsClip?> _waitFor(int index) {
+    final ready = _ready[index];
+    if (ready != null) return Future.value(ready);
+    return (_waiters[index] ??= Completer<TtsClip?>()).future;
+  }
+
+  void _complete(int index, TtsClip? clip) {
+    final w = _waiters.remove(index);
+    if (w != null && !w.isCompleted) w.complete(clip);
+  }
+
+  // ── Boucle de synthèse ─────────────────────────────────────────────────────
+
+  void _kickPump() {
+    if (_pumping || !_isSessionActive) return;
+    unawaited(_pump());
+  }
+
+  /// Prochaine phrase à synthétiser : la plus proche de la position actuelle
+  /// qui manque (ou qui a été synthétisée à une autre vitesse), tant que
+  /// l'avance visée n'est pas atteinte.
+  int? _nextToSynthesize() {
+    if (_sentenceTexts.isEmpty || _currentIndex >= _sentenceTexts.length) return null;
+    var ahead = 0.0;
+    final end = (_currentIndex + _maxSentencesAhead).clamp(0, _sentenceTexts.length - 1);
+    for (var i = _currentIndex; i <= end; i++) {
+      final c = _ready[i];
+      if (c == null) {
+        if (!_failed.contains(i)) return i;
+        continue;
+      }
+      // Ancienne vitesse : à refaire, sauf la phrase en cours et la suivante
+      // (déjà chargées dans les lecteurs, le lecteur compense l'écart).
+      if (c.speed != _synthSpeed && i > _currentIndex + 1) return i;
+      if (i > _currentIndex) ahead += c.duration * c.speed / _speed;
+      if (ahead >= _targetSecondsAhead) return null;
+    }
+    return null;
+  }
+
+  Future<void> _pump() async {
+    _pumping = true;
+    try {
+      while (_isSessionActive) {
+        // L'IA locale (dictionnaire, traduction) travaille : on lui laisse
+        // tout le processeur, sauf si la phrase à lire tout de suite manque.
+        if (LocalLlmService.busy.value && _ready.containsKey(_currentIndex)) {
+          await _waitLlmIdle();
+          continue;
+        }
+        final index = _nextToSynthesize();
+        if (index == null) break;
+        final gen = _generation;
+        var voice = _voiceName;
+        final speed = _synthSpeed;
+        var text = _sentenceTexts[index];
+        final provider = _textProvider;
+        final altVoice = _translationVoice;
+        if (provider != null && altVoice != null) {
+          try {
+            final t = (await provider(index)).trim();
+            if (t.isNotEmpty) {
+              text = t;
+              voice = altVoice;
+            }
+          } catch (e) {
+            // Traduction impossible : la phrase originale est lue à la place.
+            debugPrint('[TTS] traduction phrase $index impossible : $e');
+          }
+          if (gen != _generation) continue;
+        }
+
+        TtsClip? clip;
+        try {
+          clip = await _synthesize(text, voice, speed);
+        } catch (e) {
+          debugPrint('[TTS] ⚠ synthèse phrase $index échouée : $e');
+        }
+        if (gen != _generation) continue; // voix/livre changé entre-temps
+
+        if (clip == null) {
+          _failed.add(index);
+          _complete(index, null);
+          continue;
+        }
+        _ready[index] = clip;
+        _spoken[index] = text;
+        _complete(index, clip);
+        if (index == _currentIndex + 1) unawaited(_preloadBuffer());
+
+        // Mémoire : on oublie ce qui est loin derrière (reste sur disque).
+        _ready.removeWhere((i, _) => i < _currentIndex - 5);
+        _spoken.removeWhere((i, _) => !_ready.containsKey(i));
+      }
+    } finally {
+      _pumping = false;
+    }
+  }
+
+  Future<void> _waitLlmIdle() {
+    final c = Completer<void>();
+    void check() {
+      if (!LocalLlmService.busy.value && !c.isCompleted) {
+        LocalLlmService.busy.removeListener(check);
+        c.complete();
+      }
     }
 
-    final localVoice = LocalTtsService.availableVoices.firstWhere(
-      (v) => v.name == _voiceName,
-      orElse: () => LocalTtsService.availableVoices.first,
-    );
-
-    // Offsets de caractère de début de chaque mot — le callback de
-    // progression natif donne un offset caractère, pas un index de mot.
-    final sentenceText = _sentenceTexts[index];
-    final wordOffsets = [for (final m in RegExp(r'\S+').allMatches(sentenceText)) m.start];
-    _localTts.setWordBoundaryHandler((charStart) {
-      if (myToken != _synthesisToken) return; // phrase déjà changée
-      final idx = wordOffsets.lastIndexWhere((offset) => offset <= charStart);
-      if (idx != currentWordIndexNotifier.value) {
-        currentWordIndexNotifier.value = idx;
-      }
+    LocalLlmService.busy.addListener(check);
+    check();
+    // Garde-fou : jamais plus de 20 s de pause, quoi qu'il arrive.
+    return c.future.timeout(const Duration(seconds: 20), onTimeout: () {
+      LocalLlmService.busy.removeListener(check);
     });
+  }
 
-    _isPlaying = true;
-    _updateNotification(playing: true);
-
-    try {
-      await _localTts.speak(
-        sentenceText,
-        option: localVoice,
-        speed: _speed,
-      );
-    } catch (_) {
-      // Échec silencieux (ex: coupé par un stop() pendant la lecture)
+  Future<TtsClip> _synthesize(String text, String voice, double speed) async {
+    final cache = TtsAudioCache.instance;
+    final cached = await cache.get(voice, speed, text);
+    if (cached != null) return cached;
+    if (!SherpaTtsService.isSherpaVoice(voice)) {
+      throw Exception('Voix non disponible : $voice');
     }
-
-    _localTts.setWordBoundaryHandler(null);
-
-    // Superseded entre-temps (pause, saut, changement de voix) → ne rien faire
-    if (myToken != _synthesisToken) return;
-    if (!shouldBePlayingNotifier.value) return;
-
-    _onSentenceFinished();
+    final path = await cache.wavPathFor(voice, speed, text);
+    final res = await SherpaTtsService.instance.synthesizeToFile(
+      text: text,
+      voiceName: voice,
+      outPath: path,
+      speed: speed,
+    );
+    final clip = TtsClip(
+      path: path,
+      wordStarts: res.wordStarts,
+      duration: res.duration,
+      speed: speed,
+    );
+    await cache.put(clip);
+    return clip;
   }
 
-  /// Pré-charge N+1 dans le buffer player. Utilise le niveau 2 si disponible.
-  Future<void> _prefetchNext(int afterIndex) async {
-    final nextIndex = afterIndex + 1;
-    if (nextIndex >= _sentenceTexts.length) return;
+  // ── Suivi mot par mot ─────────────────────────────────────────────────────
 
-    _prefetchToken++;
-    final myToken = _prefetchToken;
-    _bufferLoadedIndex = null;
-
-    try {
-      String filePath;
-      List<WordTiming> words;
-
-      // Chemin rapide : N+1 déjà pré-synthétisé et en cache
-      if (_prefetchCache.containsKey(nextIndex)) {
-        filePath = _prefetchCache.remove(nextIndex)!;
-        words = _prefetchWordCache.remove(nextIndex) ?? [];
-      } else {
-        final result = await _googleTts.synthesizeText(
-          text: _sentenceTexts[nextIndex],
-          voiceName: _voiceName,
-          languageCode: _languageCode,
-        );
-        if (myToken != _prefetchToken) return;
-
-        final audioBytes = base64Decode(result['audio_content'] as String);
-        final tempDir = await getTemporaryDirectory();
-        final tempFile = File('${tempDir.path}/prefetch_$nextIndex.mp3');
-        await tempFile.writeAsBytes(audioBytes);
-        filePath = tempFile.path;
-        words = parseWordTimings(result['word_timings']);
-      }
-
-      if (myToken != _prefetchToken) return;
-
-      await _bufferPlayer.setAudioSource(AudioSource.uri(Uri.file(filePath)));
-      if (myToken != _prefetchToken) return;
-
-      _bufferLoadedIndex = nextIndex;
-      _prefetchedPath = filePath;
-      _prefetchedIndex = nextIndex;
-      _prefetchedWords = words;
-      debugPrint('[WORD-TRACK] préchargement phrase $nextIndex (buffer) : ${words.length} mots');
-    } catch (e) {
-      debugPrint('[WORD-TRACK] ⚠ échec préchargement phrase $nextIndex (buffer) : $e');
-      // Échec silencieux — synthèse à la demande en fallback
-    }
-  }
-
-  /// Lance le préchargement de N+1 (dans le buffer) ET de N+2 (en cache sur
-  /// disque) EN PARALLÈLE plutôt qu'en chaîne — 2 phrases d'avance au lieu
-  /// de 3, pour rester sous le quota TTS actuel (30 requêtes/min sur les
-  /// voix Journey) tout en gardant des transitions rapides. Repasser à 3
-  /// (ajouter `unawaited(_prefetchToFile(currentIndex + 3));`) une fois le
-  /// quota augmenté, pour une marge encore plus confortable.
-  void _prefetchAhead(int currentIndex) {
-    // Les voix locales sont instantanées (moteur natif du téléphone) — pas
-    // de latence réseau à masquer, donc rien à précharger. Sans cette
-    // garde, ces appels partaient quand même vers le backend cloud avec un
-    // nom de voix locale invalide pour Google (échec systématique).
-    if (_isLocalVoice) return;
-    unawaited(_prefetchNext(currentIndex));
-    unawaited(_prefetchToFile(currentIndex + 2));
-  }
-
-  /// Pré-synthétise une phrase sur disque et la place dans le cache
-  /// (sans la charger dans un player — ça, c'est le rôle de _prefetchNext).
-  Future<void> _prefetchToFile(int index) async {
-    if (index >= _sentenceTexts.length || index < 0) return;
-    if (_prefetchCache.containsKey(index)) return; // déjà en cache
-
-    final myGeneration = _voiceGeneration;
-
-    try {
-      final result = await _googleTts.synthesizeText(
-        text: _sentenceTexts[index],
-        voiceName: _voiceName,
-        languageCode: _languageCode,
-      );
-      // La voix a changé pendant l'attente : ce fichier ne correspond plus
-      if (myGeneration != _voiceGeneration) return;
-
-      final audioBytes = base64Decode(result['audio_content'] as String);
-      final tempDir = await getTemporaryDirectory();
-      final tempFile = File('${tempDir.path}/prefetch2_$index.mp3');
-      await tempFile.writeAsBytes(audioBytes);
-
-      if (myGeneration != _voiceGeneration) return;
-      final words = parseWordTimings(result['word_timings']);
-      _prefetchCache[index] = tempFile.path;
-      _prefetchWordCache[index] = words;
-      debugPrint('[WORD-TRACK] préchargement phrase $index (disque) : ${words.length} mots');
-    } catch (e) {
-      debugPrint('[WORD-TRACK] ⚠ échec préchargement phrase $index (disque) : $e');
-    }
-  }
-
-  void _swapPlayers() {
-    _currentIdx = 1 - _currentIdx;
-    _bufferLoadedIndex = null;
-  }
-
-  // ── Suivi mot par mot (voix cloud) ─────────────────────────────────────────
-
-  /// Repart de zéro pour une nouvelle phrase : coupe le suivi en cours et
-  /// efface le mot actif, avant que la nouvelle phrase ne charge ses propres
-  /// timings.
   void _resetWordTracking() {
     _wordTrackingTimer?.cancel();
     _wordTrackingTimer = null;
     _currentWordTimings = [];
     currentWordIndexNotifier.value = -1;
+    spokenWordIndexNotifier.value = -1;
   }
 
-  /// Suspend le suivi (pause) sans effacer le mot actif — la mise en
-  /// surbrillance reste sur le dernier mot lu pendant la pause.
+  /// Mot actif dans le texte prononcé → mot à surligner dans le livre. En
+  /// lecture de traduction, les mots ne se correspondent pas un à un : on
+  /// avance dans la phrase originale au même rythme (en proportion).
+  void _setActiveWord(int spokenIdx) {
+    if (spokenIdx != spokenWordIndexNotifier.value) {
+      spokenWordIndexNotifier.value = spokenIdx;
+    }
+    var bookIdx = spokenIdx;
+    final spokenCount = _currentWordTimings.length;
+    if (_spoken[_currentIndex] != null &&
+        _spoken[_currentIndex] != _sentenceTexts[_currentIndex] &&
+        spokenIdx >= 0 &&
+        spokenCount > 0) {
+      final bookCount = _sentenceTexts[_currentIndex].split(' ').length;
+      bookIdx = ((spokenIdx + 0.5) * bookCount / spokenCount).floor().clamp(0, bookCount - 1);
+    }
+    if (bookIdx != currentWordIndexNotifier.value) {
+      currentWordIndexNotifier.value = bookIdx;
+    }
+  }
+
   void _pauseWordTracking() {
     _wordTrackingTimer?.cancel();
     _wordTrackingTimer = null;
   }
 
-  /// Estime les timings mot par mot quand Google n'en renvoie aucun (voix
-  /// Chirp3-HD, qui accepte le SSML `<mark>` sans erreur mais l'ignore
-  /// silencieusement — voir `chirp3_personas.dart`) : répartit la durée
-  /// réelle de l'audio entre les mots, au prorata de leur longueur en
-  /// caractères. Approximatif — ne tient pas compte des pauses naturelles ni
-  /// de l'emphase du modèle — mais nettement plus utile qu'un surlignage de
-  /// phrase entière, seule alternative sans timings réels.
+  /// Repli si l'alignement n'a pas pu fournir un instant par mot : répartit
+  /// la durée réelle au prorata de la longueur des mots.
   List<WordTiming> _estimateWordTimings(String text, Duration? duration) {
     if (duration == null || duration <= Duration.zero) return const [];
-
     final words = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
     if (words.isEmpty) return const [];
-
-    // Longueur totale en caractères + un espace entre chaque mot, pour que
-    // les mots longs reçoivent proportionnellement plus de temps que les
-    // courts (approximation raisonnable du débit de parole réel).
-    final totalChars =
-        words.fold<int>(0, (sum, w) => sum + w.length) + (words.length - 1);
+    final totalChars = words.fold<int>(0, (sum, w) => sum + w.length) + (words.length - 1);
     if (totalChars <= 0) return const [];
-
     final totalSeconds = duration.inMilliseconds / 1000.0;
     final timings = <WordTiming>[];
     var charsBefore = 0;
@@ -701,41 +650,16 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
     return timings;
   }
 
-  /// Démarre un minuteur qui interroge la position de lecture pour savoir
-  /// quel mot est en train d'être prononcé (voix cloud uniquement — les
-  /// voix locales utilisent le callback natif de progression à la place).
-  /// Intervalle court (25ms) car une phrase courte (2-4 mots) peut ne durer
-  /// qu'une fraction de seconde — un intervalle plus large ratait des
-  /// transitions de mot entières sur ces phrases-là.
+  /// Interroge la position de lecture toutes les 25 ms pour savoir quel mot
+  /// est prononcé (la position est dans le temps de l'audio lui-même).
   void _startWordTracking() {
     _wordTrackingTimer?.cancel();
-
-    // Voix sans timepoints Google (Chirp3-HD et semblables, voir
-    // `Voice.hasWordTiming`) : on estime la position de chaque mot en
-    // répartissant la durée réelle de l'audio au prorata de la longueur des
-    // mots, plutôt que de se limiter à un surlignage de phrase entière.
     if (_currentWordTimings.isEmpty && _currentIndex < _sentenceTexts.length) {
-      final estimated = _estimateWordTimings(
-        _sentenceTexts[_currentIndex],
-        _currentPlayer.duration,
-      );
-      if (estimated.isNotEmpty) {
-        debugPrint('[WORD-TRACK] pas de timings Google — estimation pour '
-            '${estimated.length} mots (durée=${_currentPlayer.duration})');
-        _currentWordTimings = estimated;
-      }
+      _currentWordTimings = _estimateWordTimings(
+          _spoken[_currentIndex] ?? _sentenceTexts[_currentIndex], _currentPlayer.duration);
     }
-
-    debugPrint('[WORD-TRACK] _startWordTracking() appelé avec ${_currentWordTimings.length} mots');
-    if (_currentWordTimings.isEmpty) {
-      debugPrint('[WORD-TRACK] ⚠ aucun timing — le minuteur ne démarre pas');
-      return;
-    }
-    // Premier mot affiché immédiatement, sans attendre le premier tick du
-    // minuteur — sur une phrase très courte, ce délai d'attente pouvait à
-    // lui seul représenter une bonne partie de la durée totale de la phrase.
-    currentWordIndexNotifier.value = 0;
-    var tickCount = 0;
+    if (_currentWordTimings.isEmpty) return;
+    _setActiveWord(0);
     _wordTrackingTimer = Timer.periodic(const Duration(milliseconds: 25), (_) {
       final posSeconds = _currentPlayer.position.inMilliseconds / 1000.0;
       var idx = -1;
@@ -746,30 +670,18 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
           break;
         }
       }
-      tickCount++;
-      if (tickCount <= 5) {
-        debugPrint('[WORD-TRACK] tick $tickCount : position=${posSeconds}s -> mot $idx');
-      }
-      if (idx != currentWordIndexNotifier.value) {
-        currentWordIndexNotifier.value = idx;
-      }
+      _setActiveWord(idx);
     });
   }
 
   // ── Notification Android ───────────────────────────────────────────────────
 
-  /// Met à jour la notification média Android avec position, vitesse et contrôles.
-  /// [loading] = true pendant la synthèse TTS (montre un indicateur de chargement).
   void _updateNotification({required bool playing, bool loading = false}) {
-    // Position : on utilise l'index de phrase comme proxy de progression
-    // (1 phrase ≈ 1 seconde de façon arbitraire — donne une barre de progression)
     final position = Duration(seconds: _currentIndex);
-
     playbackState.add(playbackState.value.copyWith(
       playing: playing,
-      processingState: loading
-          ? AudioProcessingState.loading
-          : AudioProcessingState.ready,
+      processingState:
+          loading ? AudioProcessingState.loading : AudioProcessingState.ready,
       controls: [
         MediaControl.skipToPrevious,
         playing ? MediaControl.pause : MediaControl.play,
@@ -787,40 +699,37 @@ class TalkTomeAudioHandler extends BaseAudioHandler {
     ));
   }
 
-  /// Met à jour le MediaItem avec le titre du livre, la phrase courante et la durée totale.
   void _updateMediaItem() {
     final total = _sentenceTexts.length;
     mediaItem.add(MediaItem(
       id: 'talktome_current',
       title: _bookTitle,
-      artist: 'Phrase ${_currentIndex + 1} / $total',
-      // Durée totale = nombre de phrases (proxy arbitraire pour la barre de progression)
+      artist: _currentL10n().audioHandler_sentenceProgress(_currentIndex + 1, total),
       duration: Duration(seconds: total),
     ));
   }
 
   // ── Reset ──────────────────────────────────────────────────────────────────
 
-  /// Réinitialise complètement le handler quand on quitte le lecteur
+  /// Réinitialise complètement le handler quand on quitte le lecteur.
   void reset() {
-    _synthesisToken++;
-    _prefetchToken++;
-    _voiceGeneration++;
-    _ttsService?.cancel();
-    _googleTts.cancel();
+    _playToken++;
     _isSessionActive = false;
     _isPlaying = false;
+    _speedDebounce?.cancel();
     _currentPlayer.stop();
     _bufferPlayer.stop();
-    unawaited(_localTts.stop());
-    _localTts.setWordBoundaryHandler(null);
+    _currentLoadedIndex = null;
+    _currentClip = null;
+    _textProvider = null;
+    _translationVoice = null;
+    spokenTextNotifier.value = null;
+    _invalidatePipeline();
+    for (final w in _waiters.values) {
+      if (!w.isCompleted) w.complete(null);
+    }
+    _waiters.clear();
     _resetWordTracking();
-    _bufferLoadedIndex = null;
-    _prefetchedPath = null;
-    _prefetchedIndex = null;
-    _prefetchedWords = null;
-    _prefetchCache.clear();
-    _prefetchWordCache.clear();
     isSynthesizingNotifier.value = false;
     playbackState.add(PlaybackState(
       processingState: AudioProcessingState.idle,

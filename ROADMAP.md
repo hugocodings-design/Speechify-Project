@@ -35,8 +35,8 @@ This was a large jump (~300 files) that added most of the app's current identity
 - Large expansion of `reader_screen` (+1030 lines) to wire these into the reading experience.
 
 ### Phase 5 — Reader polish & rebrand (2026-11)
-- Text-only mode (eye icon) keeps the progress bar visible, with an adjustable top/bottom margin in Profile → Texte.
-- Rebranded to **TalkTome** with a new Android package ID, `com.hugocodings.talktome`, ahead of a Google Play internal test. Mascot (Tomy) and "Mystic night" theme defined; implementation is next.
+- Text-only mode (eye icon) keeps the progress bar visible; adjustable top/bottom text margins (Profile → Texte) apply in book mode and text-only mode.
+- Rebranded to **TalkTome** (PC acceleration: **TalkTome Boost**) with a new Android package ID, `com.hugocodings.talktome`, ahead of a Google Play internal test. Mascot (Tomy) and "Mystic night" theme defined; implementation is next.
 
 ---
 

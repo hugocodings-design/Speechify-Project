@@ -165,3 +165,13 @@ flutter run -d R5CX81KDFJJ
 - Flutter : `q` dans le terminal flutter run
 
 ⚠️ Ne jamais utiliser `flutter install` pour mettre à jour l'app sur le téléphone — ça désinstalle l'app avant de la réinstaller et efface toutes les données locales (bibliothèque, progression de lecture). Toujours utiliser `adb install -r build\app\outputs\flutter-apk\app-debug.apk`, qui préserve les données.
+
+---
+
+## Dépôt Git / GitHub (ajouté 2026-09-23)
+
+- Le vrai dépôt Git est à la racine de `<PROJET>/` (pas dans `flutter_app/`). Il est déjà connecté à GitHub :
+  `https://github.com/hugocodings-design/TalkTome` (privé).
+- Toujours lancer les commandes `git` depuis `<PROJET>/`, pas depuis `flutter_app/`.
+- ⚠️ Piège connu : le dossier `flutter_app/` contient un **second `.git` imbriqué**, orphelin, jamais poussé sur GitHub, avec un historique totalement différent (ancien projet séparé avant la fusion du 2026-08-22). Si une commande `git` lancée depuis `flutter_app/` donne des résultats étranges (historique inconnu, remote absent), c'est ce `.git` parasite qui répond à la place de celui de `<PROJET>/`. Il faudra le supprimer un jour (`flutter_app/.git` uniquement, aucun fichier de code n'est concerné).
+- Pour cloner ce projet sur un autre appareil (PC boulot, etc.) : `git clone https://github.com/hugocodings-design/TalkTome.git`, puis suivre les instructions de démarrage ci-dessus.
