@@ -1,11 +1,11 @@
-# Guide — Créer une clé API Google Cloud pour Speechify
+# Guide — Créer une clé API Google Cloud pour TalkTome
 
 ## 1. Ouvrir la Console Google Cloud
 
 ```
-https://console.cloud.google.com/apis/credentials?project=speechify-app-491902
+https://console.cloud.google.com/apis/credentials
 ```
-(remplacez le nom de projet si différent — connectez-vous avec le même compte Google que d'habitude)
+(sélectionnez votre projet en haut de la page — connectez-vous avec le même compte Google que d'habitude)
 
 ## 2. Créer la clé
 
@@ -20,7 +20,7 @@ Sous **"Application restrictions"**, sélectionnez **"Android apps"**, puis **"+
 
 | Champ | Valeur |
 |---|---|
-| Package name | `com.example.speechify` |
+| Package name | `com.hugocodings.talktome` |
 | SHA-1 certificate fingerprint | `74:6F:B0:A2:1B:41:62:D5:41:AA:38:26:21:62:9F:C6:C4:CE:4E:75` |
 
 ⚠️ Cette empreinte correspond à votre clé de signature **debug** (celle utilisée par `flutter run`). Si vous publiez un jour l'app sur le Play Store avec une clé de signature différente (release), il faudra ajouter une deuxième entrée avec la nouvelle empreinte.

@@ -1,5 +1,8 @@
+import 'dart:io';
+
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import 'models/ebook.dart';
@@ -10,7 +13,7 @@ import 'models/annotation.dart';
 import 'models/dictionary_entry.dart';
 import 'models/translation_entry.dart';
 import 'screens/main_screen.dart';
-import 'services/speechify_audio_handler.dart';
+import 'services/talktome_audio_handler.dart';
 
 // Préférences globales accessibles partout dans l'app
 final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.system);
@@ -37,23 +40,23 @@ final ValueNotifier<String> dictionaryLanguageNotifier = ValueNotifier('fr');
 final ValueNotifier<String> translationLanguageNotifier = ValueNotifier('fr');
 
 // Handler audio global pour la notification de lecture en arrière-plan
-SpeechifyAudioHandler? audioHandler;
+TalkTomeAudioHandler? audioHandler;
 
 // Réinitialise AudioService si audioHandler est null (artefact de hot restart en dev)
 Future<void> ensureAudioHandler() async {
   if (audioHandler != null) return;
   // Récupérer l'instance existante si AudioService est déjà initialisé
-  if (SpeechifyAudioHandler.instance != null) {
-    audioHandler = SpeechifyAudioHandler.instance;
+  if (TalkTomeAudioHandler.instance != null) {
+    audioHandler = TalkTomeAudioHandler.instance;
     debugPrint('✅ AudioService handler récupéré via _instance');
     return;
   }
   try {
     audioHandler = await AudioService.init(
-      builder: () => SpeechifyAudioHandler(),
+      builder: () => TalkTomeAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.example.speechify.audio',
-        androidNotificationChannelName: 'Speechify',
+        androidNotificationChannelId: 'com.hugocodings.talktome.audio',
+        androidNotificationChannelName: 'TalkTome',
         androidNotificationIcon: 'drawable/ic_notification',
         androidStopForegroundOnPause: false,
       ),
@@ -63,7 +66,7 @@ Future<void> ensureAudioHandler() async {
     // Peu importe la cause (AssertionError si le service Android tourne
     // encore, PlatformException si l'Activity n'est pas prête...) : le
     // builder de AudioService.init() peut avoir déjà tourné et construit un
-    // SpeechifyAudioHandler avant l'échec, auquel cas SpeechifyAudioHandler
+    // TalkTomeAudioHandler avant l'échec, auquel cas TalkTomeAudioHandler
     // .instance pointe déjà dessus. Il FAUT récupérer cette même instance
     // plutôt que d'en construire une nouvelle — sinon les widgets qui
     // écoutent l'instance capturée avant l'échec (ex: le mini-lecteur, dont
@@ -71,7 +74,7 @@ Future<void> ensureAudioHandler() async {
     // les mises à jour faites sur la "vraie" instance utilisée ensuite pour
     // la lecture.
     debugPrint('⚠️ AudioService.init a échoué ($e) — récupération du handler existant');
-    audioHandler = SpeechifyAudioHandler.instance ?? SpeechifyAudioHandler();
+    audioHandler = TalkTomeAudioHandler.instance ?? TalkTomeAudioHandler();
   }
 }
 
@@ -106,7 +109,8 @@ void main() async {
 
   // Ouvrir les boxes persistantes
   await Hive.openBox<Folder>('folders');
-  await Hive.openBox<Ebook>('ebooks');
+  final ebookBox = await Hive.openBox<Ebook>('ebooks');
+  await _repairCoverPaths(ebookBox);
   final annotationBox = await Hive.openBox<Annotation>('annotations');
   await _cleanupAnnotationArtifacts(annotationBox);
   await Hive.openBox('reading_stats');
@@ -143,7 +147,24 @@ void main() async {
   translationLanguageNotifier.value =
       settings.get('translationLanguage', defaultValue: 'fr') as String;
 
-  runApp(const SpeechifyApp());
+  runApp(const TalkTomeApp());
+}
+
+/// Les couvertures sont enregistrées avec un chemin absolu, qui contient
+/// l'identifiant du paquet Android : après une copie des données depuis une
+/// installation sous un autre identifiant, on les rattache au dossier covers/
+/// actuel quand le fichier s'y trouve. Sans effet une fois les chemins bons.
+Future<void> _repairCoverPaths(Box<Ebook> box) async {
+  final coversDir = '${(await getApplicationDocumentsDirectory()).path}/covers';
+  for (final key in box.keys.toList()) {
+    final ebook = box.get(key);
+    final path = ebook?.coverImagePath;
+    if (ebook == null || path == null || File(path).existsSync()) continue;
+    final relocated = '$coversDir/${path.split('/').last}';
+    if (!File(relocated).existsSync()) continue;
+    ebook.coverImagePath = relocated;
+    await box.put(key, ebook);
+  }
 }
 
 /// Ouvre une box Hive, et si sa lecture échoue (typiquement un
@@ -210,14 +231,14 @@ ThemeMode _parseThemeMode(String value) {
   }
 }
 
-class SpeechifyApp extends StatefulWidget {
-  const SpeechifyApp({Key? key}) : super(key: key);
+class TalkTomeApp extends StatefulWidget {
+  const TalkTomeApp({Key? key}) : super(key: key);
 
   @override
-  State<SpeechifyApp> createState() => _SpeechifyAppState();
+  State<TalkTomeApp> createState() => _TalkTomeAppState();
 }
 
-class _SpeechifyAppState extends State<SpeechifyApp> {
+class _TalkTomeAppState extends State<TalkTomeApp> {
   @override
   void initState() {
     super.initState();
@@ -244,7 +265,7 @@ class _SpeechifyAppState extends State<SpeechifyApp> {
       valueListenable: themeModeNotifier,
       builder: (context, themeMode, _) {
         return MaterialApp(
-          title: 'Speechify',
+          title: 'TalkTome',
           debugShowCheckedModeBanner: false,
           theme: ThemeData(
             useMaterial3: true,

@@ -13,9 +13,9 @@ import '../models/word_timing.dart';
 /// Gère la session média Android (foreground service + notification de lecture).
 /// Contient la boucle complète de synthèse + lecture pour que tout fonctionne
 /// en arrière-plan sans être throttlé par Android.
-class SpeechifyAudioHandler extends BaseAudioHandler {
-  static SpeechifyAudioHandler? _instance;
-  static SpeechifyAudioHandler? get instance => _instance;
+class TalkTomeAudioHandler extends BaseAudioHandler {
+  static TalkTomeAudioHandler? _instance;
+  static TalkTomeAudioHandler? get instance => _instance;
 
   // Double-buffer : deux lecteurs pour transitions instantanées entre phrases
   final List<AudioPlayer> _players = [AudioPlayer(), AudioPlayer()];
@@ -131,7 +131,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
         ],
       );
 
-  SpeechifyAudioHandler() {
+  TalkTomeAudioHandler() {
     _instance = this;
     _setupPlayerListeners();
   }
@@ -791,7 +791,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
   void _updateMediaItem() {
     final total = _sentenceTexts.length;
     mediaItem.add(MediaItem(
-      id: 'speechify_current',
+      id: 'talktome_current',
       title: _bookTitle,
       artist: 'Phrase ${_currentIndex + 1} / $total',
       // Durée totale = nombre de phrases (proxy arbitraire pour la barre de progression)

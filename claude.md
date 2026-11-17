@@ -1,7 +1,13 @@
-# Speechify — AI-Powered Ebook Reader with TTS
+# TalkTome — AI-Powered Ebook Reader with TTS
 
 ## What This Project Is
 A Flutter cross-platform mobile app that lets you upload ebooks (PDFs/EPUBs) and listen to them read aloud using Google Cloud Text-to-Speech with multiple voice options.
+
+## Brand identity
+- **App name:** TalkTome ("a tome that talks" / "talk to me")
+- **Android package ID:** `com.hugocodings.talktome` (permanent once published on Google Play)
+- **Mascot:** Tomy — a thick purple grimoire with mystic runes, eyes and a mouth, wearing his red ribbon bookmark (signet) like a cape. Playful little hero; he's the one who will guide users through tutorials.
+- **Theme direction:** "Mystic night" — deep purple/indigo, soft gold accents, red reserved for the signet and key actions. Dark-first.
 
 ## Phase 1 Status: COMPLETE ✅
 - Backend FastAPI server with Google Cloud TTS integration: **DONE**
@@ -23,7 +29,7 @@ A Flutter cross-platform mobile app that lets you upload ebooks (PDFs/EPUBs) and
 ---
 
 ## Project Structure
-SPEECHIFY HUGO/
+<PROJET>/
 ├── claude.md
 ├── backend/
 │ ├── server.js (or main.py)
@@ -81,7 +87,7 @@ SPEECHIFY HUGO/
 ## Implementation Plan (2–4 weeks)
 
 ### Phase 1: Backend + Flutter Setup (2–3 days)
-- [ ] Create Flutter project: `flutter create speechify`
+- [ ] Create Flutter project: `flutter create talktome`
 - [ ] Add pubspec.yaml dependencies
 - [ ] Deploy backend with 2 endpoints: `/api/voices` and `/api/synthesize`
 - [ ] Set up Google Cloud TTS credentials
@@ -126,9 +132,9 @@ python main.py  # Start on localhost:8000
 
 ## Emplacement unique du projet (mis à jour 2026-08-22)
 
-Tout vit désormais sous ce seul dossier — plus de `C:\dev\speechify` séparé :
+Tout vit sous un seul dossier, noté `<PROJET>` ci-dessous (sur le PC : `c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\<nom du dossier du projet>`) :
 ```
-SPEECHIFY HUGO/
+<PROJET>/
 ├── backend/          ← serveur FastAPI (TTS)
 ├── flutter_app/       ← l'application réelle (Accueil, Bibliothèque, +, Paramètres, Profil)
 └── claude.md
@@ -136,19 +142,21 @@ SPEECHIFY HUGO/
 
 ### Pour démarrer (deux terminaux)
 
+`<CLE_JSON>` = le fichier JSON de la clé du compte de service Google Cloud, rangé dans `<PROJET>` et jamais commité.
+
 ```powershell
 # Terminal 1 — Backend
-cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\backend"
+cd "<PROJET>\backend"
 venv\Scripts\activate
-$env:GOOGLE_APPLICATION_CREDENTIALS="c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\speechify-app-491902-c2f95c0c3aa3.json"
+$env:GOOGLE_APPLICATION_CREDENTIALS="<PROJET>\<CLE_JSON>"
 python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 Note : utiliser `python -m uvicorn`, pas `uvicorn.exe` directement — le stub `.exe` est bloqué sur cette machine.
 
 ```powershell
 # Terminal 2 — Flutter (l'app réelle, avec Accueil/Bibliothèque/Profil)
-cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\flutter_app"
-$env:PATH += ";c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\SPEECHIFY HUGO\flutter_windows_3.41.5-stable\flutter\bin"
+cd "<PROJET>\flutter_app"
+$env:PATH += ";<PROJET>\flutter_windows_3.41.5-stable\flutter\bin"
 flutter run -d R5CX81KDFJJ
 ```
 

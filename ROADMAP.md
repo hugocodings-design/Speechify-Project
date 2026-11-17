@@ -1,4 +1,4 @@
-# Speechify — Project Roadmap
+# TalkTome — Project Roadmap
 
 _Last updated: 2026-08-28. Generated from git history (`54c1595` → `1f8ea46`) and current repo structure._
 
@@ -22,7 +22,7 @@ An AI-powered ebook reader (Flutter app + FastAPI backend) that lets you import 
 This was a large jump (~300 files) that added most of the app's current identity:
 - **Voice system overhaul**: Chirp3 personas with avatar images across en-GB/en-US/es-ES/es-US/fr-CA/fr-FR/pt-BR, a local (offline) TTS fallback service, and a direct Google TTS service.
 - **Book scanning pipeline**: camera capture → crop → OCR → "scan to book" conversion, with its own screens (`scan/camera_capture_screen`, `scan/crop_screen`, `scan_review_screen`) and services (`ocr_service`, `image_processing_service`, `scan_to_book_service`), including a test suite.
-- **Background audio**: `speechify_audio_handler` (large, ~830 lines) for lock-screen/notification playback controls.
+- **Background audio**: `talktome_audio_handler` (large, ~830 lines) for lock-screen/notification playback controls.
 - **App navigation redesign**: `main_screen` (bottom nav), `recent_screen`, `profile_screen`, folders (`folder` model) for organizing the library, and a persistent `mini_player` widget.
 - **Reading stats**: `stats_service`.
 
@@ -33,6 +33,10 @@ This was a large jump (~300 files) that added most of the app's current identity
 - In-app dictionary powered by Gemini (`dictionary_service`, `dictionary_sheet`).
 - Live and manual translation via Google Translate (`translation_service`, `translation_sheet`).
 - Large expansion of `reader_screen` (+1030 lines) to wire these into the reading experience.
+
+### Phase 5 — Reader polish & rebrand (2026-11)
+- Text-only mode (eye icon) keeps the progress bar visible, with an adjustable top/bottom margin in Profile → Texte.
+- Rebranded to **TalkTome** with a new Android package ID, `com.hugocodings.talktome`, ahead of a Google Play internal test. Mascot (Tomy) and "Mystic night" theme defined; implementation is next.
 
 ---
 
