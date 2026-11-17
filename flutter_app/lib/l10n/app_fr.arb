@@ -171,6 +171,8 @@
   "profileScreen_noReadingRecorded": "Aucune lecture enregistrée",
   "profileScreen_startReadingHint": "Commence à lire pour voir tes statistiques",
   "profileScreen_appearance": "Apparence",
+  "profileScreen_expressiveReading": "Lecture expressive",
+  "profileScreen_expressiveReadingHint": "La voix adapte son rythme, son ton et ses pauses à l'émotion de chaque phrase (analyse par l'IA de l'ordinateur quand TalkTome Boost est connecté)",
   "profileScreen_system": "Système",
   "profileScreen_light": "Clair",
   "profileScreen_dark": "Sombre",

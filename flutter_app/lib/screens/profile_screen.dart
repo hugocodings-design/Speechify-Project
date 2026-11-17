@@ -4,7 +4,8 @@ import 'package:intl/intl.dart' as intl;
 import '../l10n/generated/app_localizations.dart';
 import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, readerMarginNotifier,
-        dictionaryLanguageNotifier, translationLanguageNotifier, appLocaleNotifier;
+        expressiveReadingNotifier, dictionaryLanguageNotifier, translationLanguageNotifier,
+        appLocaleNotifier;
 import '../services/stats_service.dart';
 import '../widgets/pc_boost_tile.dart';
 import '../widgets/section_header.dart';
@@ -52,6 +53,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _setReaderMargin(double margin) {
     readerMarginNotifier.value = margin;
     Hive.box('settings').put('readerMargin', margin);
+  }
+
+  void _setExpressiveReading(bool enabled) {
+    expressiveReadingNotifier.value = enabled;
+    Hive.box('settings').put('expressiveReading', enabled);
   }
 
   void _setDictionaryLanguage(String code) {
@@ -255,6 +261,17 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 onChanged: (v) => _setTheme(v!),
               ),
             ],
+          ),
+        ),
+
+        ValueListenableBuilder<bool>(
+          valueListenable: expressiveReadingNotifier,
+          builder: (context, enabled, _) => SwitchListTile(
+            secondary: const Icon(Icons.mood_rounded),
+            title: Text(l10n.profileScreen_expressiveReading),
+            subtitle: Text(l10n.profileScreen_expressiveReadingHint),
+            value: enabled,
+            onChanged: _setExpressiveReading,
           ),
         ),
 

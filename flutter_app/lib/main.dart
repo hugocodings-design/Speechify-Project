@@ -30,6 +30,10 @@ final ValueNotifier<double> fontSizeNotifier = ValueNotifier(16.0);
 /// Texte. Simple padding : prend la couleur du thème de lecture choisi.
 final ValueNotifier<double> readerMarginNotifier = ValueNotifier(32.0);
 
+/// Lecture expressive (Profil > Apparence) : la voix adapte rythme, timbre,
+/// volume et pauses à l'humeur de chaque phrase.
+final ValueNotifier<bool> expressiveReadingNotifier = ValueNotifier(false);
+
 /// Langue dans laquelle Gemini rédige les définitions du dictionnaire.
 /// Code court ISO ('fr', 'en', 'pt', 'es') et non une locale complète comme
 /// pour les voix TTS ('fr-FR'). Réglable séparément de
@@ -143,6 +147,8 @@ void main() async {
   // l'utilisateur (bouton "Traduire" dans la barre de sélection) — voir
   // TranslationEntry. Distincte de translation_cache ci-dessus.
   await _openBoxOrResetIfCorrupt<TranslationEntry>('translations');
+  // Humeur de chaque phrase déjà analysée par l'IA (lecture expressive).
+  await _openBoxOrResetIfCorrupt('mood_cache');
   final settings = await Hive.openBox('settings');
 
   // Restaurer les préférences sauvegardées
@@ -152,6 +158,8 @@ void main() async {
   fontSizeNotifier.value = (settings.get('fontSize', defaultValue: 16.0) as num).toDouble();
   readerMarginNotifier.value =
       (settings.get('readerMargin', defaultValue: 32.0) as num).toDouble();
+  expressiveReadingNotifier.value =
+      settings.get('expressiveReading', defaultValue: false) as bool;
   dictionaryLanguageNotifier.value =
       settings.get('dictionaryLanguage', defaultValue: 'fr') as String;
   translationLanguageNotifier.value =

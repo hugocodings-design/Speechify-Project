@@ -872,6 +872,18 @@ abstract class AppLocalizations {
   /// **'Apparence'**
   String get profileScreen_appearance;
 
+  /// No description provided for @profileScreen_expressiveReading.
+  ///
+  /// In fr, this message translates to:
+  /// **'Lecture expressive'**
+  String get profileScreen_expressiveReading;
+
+  /// No description provided for @profileScreen_expressiveReadingHint.
+  ///
+  /// In fr, this message translates to:
+  /// **'La voix adapte son rythme, son ton et ses pauses à l\'émotion de chaque phrase (analyse par l\'IA de l\'ordinateur quand TalkTome Boost est connecté)'**
+  String get profileScreen_expressiveReadingHint;
+
   /// No description provided for @profileScreen_system.
   ///
   /// In fr, this message translates to:
