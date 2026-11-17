@@ -17,6 +17,13 @@ final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.syste
 final ValueNotifier<String?> fontFamilyNotifier = ValueNotifier(null);
 final ValueNotifier<double> fontSizeNotifier = ValueNotifier(16.0);
 
+/// Marge (en px) ajoutée au-dessus et au-dessous du texte en mode "texte
+/// seul" (quand on masque le lecteur avec l'œil, pendant la lecture) —
+/// réglable dans Profil > Texte. Toujours peinte dans la couleur de fond du
+/// thème actuel (clair/sombre/système) puisqu'il s'agit juste de padding sur
+/// le Scaffold, jamais d'une couleur fixe noire/blanche.
+final ValueNotifier<double> readerMarginNotifier = ValueNotifier(32.0);
+
 /// Langue dans laquelle Gemini rédige les définitions du dictionnaire.
 /// Code court ISO ('fr', 'en', 'pt', 'es') et non une locale complète comme
 /// pour les voix TTS ('fr-FR'). Réglable séparément de
@@ -129,6 +136,8 @@ void main() async {
   themeModeNotifier.value = _parseThemeMode(savedTheme);
   fontFamilyNotifier.value = settings.get('fontFamily') as String?;
   fontSizeNotifier.value = (settings.get('fontSize', defaultValue: 16.0) as num).toDouble();
+  readerMarginNotifier.value =
+      (settings.get('readerMargin', defaultValue: 32.0) as num).toDouble();
   dictionaryLanguageNotifier.value =
       settings.get('dictionaryLanguage', defaultValue: 'fr') as String;
   translationLanguageNotifier.value =

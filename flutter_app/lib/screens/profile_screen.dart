@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 import '../main.dart'
-    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
-        translationLanguageNotifier;
+    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, readerMarginNotifier,
+        dictionaryLanguageNotifier, translationLanguageNotifier;
 import '../services/stats_service.dart';
 import '../widgets/section_header.dart';
 
@@ -59,6 +59,11 @@ class _ProfileScreenState extends State<ProfileScreen> {
   void _setFontFamily(String? family) {
     fontFamilyNotifier.value = family;
     Hive.box('settings').put('fontFamily', family);
+  }
+
+  void _setReaderMargin(double margin) {
+    readerMarginNotifier.value = margin;
+    Hive.box('settings').put('readerMargin', margin);
   }
 
   void _setDictionaryLanguage(String code) {
@@ -312,6 +317,40 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ],
               onChanged: _setFontFamily,
             ),
+          ),
+        ),
+
+        ValueListenableBuilder<double>(
+          valueListenable: readerMarginNotifier,
+          builder: (context, margin, _) => Column(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.vertical_align_center_rounded),
+                title: const Text('Marge en mode texte seul'),
+                subtitle: const Text(
+                  "Espace au-dessus et au-dessous du texte quand on masque "
+                  "le lecteur (l'œil) pendant la lecture",
+                ),
+                trailing: Text(
+                  '${margin.toInt()} px',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: Theme.of(context).colorScheme.primary,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16),
+                child: Slider(
+                  value: margin,
+                  min: 0,
+                  max: 120,
+                  divisions: 12,
+                  onChanged: _setReaderMargin,
+                ),
+              ),
+            ],
           ),
         ),
 

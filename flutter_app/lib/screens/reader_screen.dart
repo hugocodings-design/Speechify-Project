@@ -14,8 +14,8 @@ import '../services/local_tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/translation_service.dart';
 import '../main.dart'
-    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
-        translationLanguageNotifier,
+    show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, readerMarginNotifier,
+        dictionaryLanguageNotifier, translationLanguageNotifier,
         audioHandler, ensureAudioHandler;
 import '../services/stats_service.dart';
 import '../data/voice_characters.dart';
@@ -3053,7 +3053,9 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   valueListenable: fontSizeNotifier,
                   builder: (context, fontSize, _) => ValueListenableBuilder<String?>(
                     valueListenable: fontFamilyNotifier,
-                    builder: (context, fontFamily, _) => NotificationListener<ScrollNotification>(
+                    builder: (context, fontFamily, _) => ValueListenableBuilder<double>(
+                    valueListenable: readerMarginNotifier,
+                    builder: (context, readerMargin, _) => NotificationListener<ScrollNotification>(
                   onNotification: _onScrollNotification,
                   child: ScrollablePositionedList.builder(
                   // scrollable_positioned_list mesure et met en cache la
@@ -3075,15 +3077,18 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   itemScrollController: _itemScrollController,
                   itemPositionsListener: _itemPositionsListener,
                   // En mode "texte seul" (contrôles masqués via l'œil), on
-                  // laisse plus d'air en haut (pas d'AppBar : zone de
-                  // sécurité + marge) et en bas (au-dessus de la barre de
-                  // progression réduite), pour que le texte ne colle pas
-                  // aux bords de l'écran.
+                  // laisse plus d'air en haut (zone de sécurité, pas
+                  // d'AppBar, + la marge réglable ci-dessous) et en bas
+                  // (au-dessus de la barre de progression réduite), pour
+                  // que le texte ne colle pas aux bords de l'écran. Réglage
+                  // dans Profil > Texte > "Marge en mode texte seul" —
+                  // toujours peint dans la couleur de fond du thème actuel
+                  // puisque c'est juste du padding sur le Scaffold.
                   padding: EdgeInsets.fromLTRB(
                     16,
-                    _readerVisible ? 16 : MediaQuery.of(context).padding.top + 28,
+                    _readerVisible ? 16 : MediaQuery.of(context).padding.top + readerMargin,
                     16,
-                    _readerVisible ? 24 : 32,
+                    _readerVisible ? 24 : readerMargin,
                   ),
                   initialScrollIndex: _findDisplayIndex(_currentGlobalIndex).clamp(0, _displayItems.length - 1),
                   itemCount: _displayItems.length,
@@ -3121,6 +3126,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                   },
                   ),
                     ),
+                  ),
                   ),
                 ),
 
