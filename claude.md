@@ -172,6 +172,7 @@ flutter run -d R5CX81KDFJJ
 
 ## iPhone (iOS) — ajouté 2026-11-19
 
+- **Deux versions séparées** : la branche `master` = version Android (jamais touchée pour l'iPhone) ; la branche `ios` = version iPhone. Pour apporter à l'iPhone une nouveauté faite sur Android : `git checkout ios && git merge master && git push`. Ne jamais fusionner `ios` dans `master`.
 - Installation sur l'iPhone de Carolane depuis un Mac : ouvrir `flutter_app/ios/Runner.xcworkspace` (jamais le `.xcodeproj`), équipe « Carolane Rebelo (Personal Team) », destination = l'iPhone réel (section « iOS Device »), configuration **Release**. Compte gratuit : l'app expire au bout de 7 jours → rebrancher et relancer ▶.
 - Identifiant d'app : `com.hugo.talktome`. iOS 15.5 minimum (exigé par ML Kit), fixé dans `ios/Podfile` et le projet Xcode.
 - Voix IA : sur iPhone, les modèles sherpa-onnx se téléchargent depuis l'app (Profil → Voix IA, ou le bouton « Voix IA » du sélecteur de voix). Ils viennent des versions officielles `k2-fsa/sherpa-onnx` (`tts-models/<dossier>.tar.bz2`), dans le même dossier que sur Android.
