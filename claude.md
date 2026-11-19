@@ -167,3 +167,14 @@ flutter run -d R5CX81KDFJJ
 - Toujours lancer les commandes `git` depuis `SPEECHIFY HUGO/`, pas depuis `flutter_app/`.
 - ⚠️ Piège connu : le dossier `flutter_app/` contient un **second `.git` imbriqué**, orphelin, jamais poussé sur GitHub, avec un historique totalement différent (ancien projet séparé avant la fusion du 2026-08-22). Si une commande `git` lancée depuis `flutter_app/` donne des résultats étranges (historique inconnu, remote absent), c'est ce `.git` parasite qui répond à la place de celui de `SPEECHIFY HUGO/`. Il faudra le supprimer un jour (`flutter_app/.git` uniquement, aucun fichier de code n'est concerné).
 - Pour cloner ce projet sur un autre appareil (PC boulot, etc.) : `git clone https://github.com/hugocodings-design/Speechify-Project.git`, puis suivre les instructions de démarrage ci-dessus.
+
+---
+
+## iPhone (iOS) — ajouté 2026-11-19
+
+- Installation sur l'iPhone de Carolane depuis un Mac : ouvrir `flutter_app/ios/Runner.xcworkspace` (jamais le `.xcodeproj`), équipe « Carolane Rebelo (Personal Team) », destination = l'iPhone réel (section « iOS Device »), configuration **Release**. Compte gratuit : l'app expire au bout de 7 jours → rebrancher et relancer ▶.
+- Identifiant d'app : `com.hugo.talktome`. iOS 15.5 minimum (exigé par ML Kit), fixé dans `ios/Podfile` et le projet Xcode.
+- Voix IA : sur iPhone, les modèles sherpa-onnx se téléchargent depuis l'app (Profil → Voix IA, ou le bouton « Voix IA » du sélecteur de voix). Ils viennent des versions officielles `k2-fsa/sherpa-onnx` (`tts-models/<dossier>.tar.bz2`), dans le même dossier que sur Android.
+- Speechify Boost fonctionne sur iPhone (exception ATS + description réseau local dans `Info.plist`). Quand le PC répond, toutes les voix sont proposées, même non installées.
+- L'IA Qwen intégrée (`packages/llama_flutter_android`) est Android uniquement : sur iPhone, le dictionnaire/traduction IA ne marche que via Speechify Boost.
+- Mise à jour sur le Mac : `git pull`, `flutter pub get`, `cd ios && pod install && cd ..`, puis ▶ dans Xcode.

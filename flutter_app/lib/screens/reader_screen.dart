@@ -15,6 +15,8 @@ import '../services/sherpa_tts_service.dart';
 import '../services/dictionary_service.dart';
 import '../services/translation_service.dart';
 import '../services/local_llm_service.dart';
+import '../services/pc_boost_service.dart';
+import 'voice_download_screen.dart';
 import '../main.dart'
     show themeModeNotifier, fontFamilyNotifier, fontSizeNotifier, dictionaryLanguageNotifier,
         translationLanguageNotifier,
@@ -2597,9 +2599,29 @@ class _ReaderScreenState extends State<ReaderScreen> {
       });
     }
 
+    await _refreshVoices();
+
+    // Précharge l'IA locale en arrière-plan (sans gêner la voix) : elle sera
+    // prête quand l'utilisateur touchera « Définir ».
+    Future.delayed(const Duration(seconds: 4), () {
+      if (mounted) unawaited(LocalLlmService.instance.warmUp(pauseAudio: false));
+    });
+
+    // Demander les permissions requises pour la lecture en arrière-plan
+    await _requestBackgroundPermissions();
+  }
+
+  /// Recharge la liste des voix disponibles (à l'ouverture, et au retour
+  /// de l'écran de téléchargement des voix IA).
+  Future<void> _refreshVoices() async {
     // 100 % gratuit : uniquement les voix IA locales installées sur le
     // téléphone, dans l'ordre anglais → français → portugais.
-    final aiVoices = await SherpaTtsService.instance.installedVoices();
+    // Ordinateur joignable (Speechify Boost) : il a toutes les voix, même
+    // celles qui ne sont pas installées sur ce téléphone (iPhone…).
+    final boostReady = await PcBoostService.instance.base() != null;
+    final aiVoices = boostReady
+        ? SherpaTtsService.voices
+        : await SherpaTtsService.instance.installedVoices();
     final voices = <Voice>[
       ...aiVoices.map((v) => Voice(
             name: v.name,
@@ -2635,15 +2657,14 @@ class _ReaderScreenState extends State<ReaderScreen> {
       widget.ebook.selectedVoiceName = fallback.name;
       await ebookBox.put(widget.ebook.id, widget.ebook);
     }
+  }
 
-    // Précharge l'IA locale en arrière-plan (sans gêner la voix) : elle sera
-    // prête quand l'utilisateur touchera « Définir ».
-    Future.delayed(const Duration(seconds: 4), () {
-      if (mounted) unawaited(LocalLlmService.instance.warmUp(pauseAudio: false));
-    });
-
-    // Demander les permissions requises pour la lecture en arrière-plan
-    await _requestBackgroundPermissions();
+  /// Écran de téléchargement des voix IA, puis mise à jour de la liste.
+  Future<void> _openVoiceDownloads() async {
+    await Navigator.of(context).push(MaterialPageRoute(
+      builder: (_) => const VoiceDownloadScreen(),
+    ));
+    if (mounted) await _refreshVoices();
   }
 
   /// Demande la permission notification (Android 13+) et l'exemption batterie (Samsung One UI)
@@ -2994,12 +3015,26 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     ),
                   ),
                 ),
-                Text(
-                  AppLocalizations.of(context)!.reader_chooseVoice,
-                  style: Theme.of(context)
-                      .textTheme
-                      .titleLarge
-                      ?.copyWith(fontWeight: FontWeight.bold),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        AppLocalizations.of(context)!.reader_chooseVoice,
+                        style: Theme.of(context)
+                            .textTheme
+                            .titleLarge
+                            ?.copyWith(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        _openVoiceDownloads();
+                      },
+                      icon: const Icon(Icons.download_rounded, size: 18),
+                      label: Text(AppLocalizations.of(context)!.voiceDownloads_manage),
+                    ),
+                  ],
                 ),
                 const SizedBox(height: 8),
                 _buildPitchSlider(context, () => setModalState(() {})),
@@ -4135,7 +4170,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
                     Transform.translate(
                       offset: const Offset(10, -8),
                       child: GestureDetector(
-                      onTap: availableVoices.isEmpty ? null : _showVoicePicker,
+                      onTap: availableVoices.isEmpty ? _openVoiceDownloads : _showVoicePicker,
                       child: ClipOval(
                         child: availableVoices.any((v) => v.name == selectedVoice)
                             ? VoiceAvatar(

@@ -65,7 +65,10 @@ class LocalLlmService {
     return File('${support.path}/llm/$modelFileName');
   }
 
-  Future<bool> isInstalled() async => (await modelFile()).exists();
+  /// Le moteur llama.cpp intégré n'existe que sur Android : ailleurs
+  /// (iPhone), l'IA ne passe que par l'ordinateur (Speechify Boost).
+  Future<bool> isInstalled() async =>
+      Platform.isAndroid && await (await modelFile()).exists();
 
   /// L'IA est utilisable : sur l'ordinateur (Speechify Boost) ou sur le
   /// téléphone.
@@ -194,7 +197,7 @@ class LocalLlmService {
     // terminée côté moteur (sinon sa fin fermerait le flux de la nouvelle).
     final previous = _activeDone;
     if (previous != null && !previous.isCompleted) {
-      await _llama.stop();
+      if (Platform.isAndroid) await _llama.stop();
       await previous.future.timeout(const Duration(seconds: 5), onTimeout: () {});
     }
     if (serial != _requestSerial) return; // déjà remplacée par une plus récente

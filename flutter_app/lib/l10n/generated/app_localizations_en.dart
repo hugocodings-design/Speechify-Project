@@ -943,4 +943,60 @@ class AppLocalizationsEn extends AppLocalizations {
   String audioHandler_sentenceProgress(int current, int total) {
     return 'Sentence $current / $total';
   }
+
+  @override
+  String get voiceDownloads_title => 'AI voices';
+
+  @override
+  String get voiceDownloads_manage => 'AI voices';
+
+  @override
+  String get voiceDownloads_section => 'AI voices';
+
+  @override
+  String voiceDownloads_tileSubtitle(int installed, int total) {
+    return '$installed / $total models installed on this phone';
+  }
+
+  @override
+  String get voiceDownloads_intro =>
+      'AI voices run offline, right on your phone. Download the ones you want — Wi-Fi is recommended, and keep the app open while they install.';
+
+  @override
+  String voiceDownloads_installAll(int size) {
+    return 'Download all (~$size MB)';
+  }
+
+  @override
+  String get voiceDownloads_installed => 'Installed';
+
+  @override
+  String get voiceDownloads_download => 'Download';
+
+  @override
+  String voiceDownloads_downloading(int percent) {
+    return 'Downloading… $percent%';
+  }
+
+  @override
+  String get voiceDownloads_extracting => 'Installing… (a few minutes)';
+
+  @override
+  String get voiceDownloads_failed => 'Download failed — tap to retry';
+
+  @override
+  String get voiceDownloads_delete => 'Delete';
+
+  @override
+  String voiceDownloads_deleteConfirm(String name) {
+    return 'Delete $name from this phone? You can download it again later.';
+  }
+
+  @override
+  String get voiceDownloads_cancel => 'Cancel';
+
+  @override
+  String voiceDownloads_sizeMb(int size) {
+    return '~$size MB';
+  }
 }
