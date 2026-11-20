@@ -9,7 +9,7 @@ class AppLocalizationsFr extends AppLocalizations {
   AppLocalizationsFr([String locale = 'fr']) : super(locale);
 
   @override
-  String get appTitle => 'Speechify';
+  String get appTitle => 'TalkTome';
 
   @override
   String get miniPlayer_almostDone => 'Presque terminé';

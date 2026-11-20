@@ -1,4 +1,4 @@
-"""Speechify Boost — accélération gratuite de l'app par l'ordinateur.
+"""TalkTome Boost — accélération gratuite de l'app par l'ordinateur.
 
 Le téléphone envoie ici, quand il peut joindre l'ordinateur (Wi-Fi de la
 maison ou Tailscale), ce qu'il ferait sinon lui-même :
@@ -9,7 +9,7 @@ Mêmes modèles que sur le téléphone : même voix, même qualité, juste plus
 vite. Aucune API payante. Si l'ordinateur ne répond pas, l'app fait tout
 elle-même, comme avant.
 
-Tout vit dans %LOCALAPPDATA%\\SpeechifyBoost :
+Tout vit dans %LOCALAPPDATA%\\TalkTomeBoost :
   venv\\            environnement Python (sherpa-onnx CUDA, FastAPI)
   models\\tts\\     modèles de voix (mêmes dossiers que sur le téléphone)
   models\\llm\\     qwen3-4b-instruct.gguf
@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 
-BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'SpeechifyBoost'
+BASE = Path(os.environ.get('LOCALAPPDATA', str(Path.home()))) / 'TalkTomeBoost'
 TTS_DIR = BASE / 'models' / 'tts'
 LLM_MODEL = BASE / 'models' / 'llm' / 'qwen3-4b-instruct.gguf'
 LLAMA_EXE = BASE / 'llama' / 'llama-server.exe'
@@ -92,7 +92,7 @@ def load_config() -> dict:
 
 
 cfg = load_config()
-app = FastAPI(title='Speechify Boost', version=str(VERSION))
+app = FastAPI(title='TalkTome Boost', version=str(VERSION))
 
 
 def check_token(token: str | None) -> None:
@@ -277,7 +277,7 @@ def health(x_boost_token: str | None = Header(default=None)):
 
 
 def main() -> None:
-    log.info('Speechify Boost démarre — port %s, code %s', cfg['port'], cfg['token'])
+    log.info('TalkTome Boost démarre — port %s, code %s', cfg['port'], cfg['token'])
     if '--no-llm' not in sys.argv:  # --no-llm : voix seulement (tests)
         start_llama()
     try:

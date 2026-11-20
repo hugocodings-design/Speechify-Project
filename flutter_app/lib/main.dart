@@ -1,9 +1,11 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:audio_service/audio_service.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:path_provider/path_provider.dart';
 import 'l10n/generated/app_localizations.dart';
 import 'models/ebook.dart';
 import 'models/chapter.dart';
@@ -16,7 +18,7 @@ import 'screens/main_screen.dart';
 import 'services/llm_selftest.dart';
 import 'services/pc_boost_service.dart';
 import 'services/reading_theme.dart';
-import 'services/speechify_audio_handler.dart';
+import 'services/talktome_audio_handler.dart';
 
 // Préférences globales accessibles partout dans l'app
 final ValueNotifier<ThemeMode> themeModeNotifier = ValueNotifier(ThemeMode.system);
@@ -43,23 +45,23 @@ final ValueNotifier<String> translationLanguageNotifier = ValueNotifier('fr');
 final ValueNotifier<Locale?> appLocaleNotifier = ValueNotifier(null);
 
 // Handler audio global pour la notification de lecture en arrière-plan
-SpeechifyAudioHandler? audioHandler;
+TalkTomeAudioHandler? audioHandler;
 
 // Réinitialise AudioService si audioHandler est null (artefact de hot restart en dev)
 Future<void> ensureAudioHandler() async {
   if (audioHandler != null) return;
   // Récupérer l'instance existante si AudioService est déjà initialisé
-  if (SpeechifyAudioHandler.instance != null) {
-    audioHandler = SpeechifyAudioHandler.instance;
+  if (TalkTomeAudioHandler.instance != null) {
+    audioHandler = TalkTomeAudioHandler.instance;
     debugPrint('✅ AudioService handler récupéré via _instance');
     return;
   }
   try {
     audioHandler = await AudioService.init(
-      builder: () => SpeechifyAudioHandler(),
+      builder: () => TalkTomeAudioHandler(),
       config: const AudioServiceConfig(
-        androidNotificationChannelId: 'com.example.speechify.audio',
-        androidNotificationChannelName: 'Speechify',
+        androidNotificationChannelId: 'com.hugo.talktome.audio',
+        androidNotificationChannelName: 'TalkTome',
         androidNotificationIcon: 'drawable/ic_notification',
         androidStopForegroundOnPause: false,
       ),
@@ -69,7 +71,7 @@ Future<void> ensureAudioHandler() async {
     // Peu importe la cause (AssertionError si le service Android tourne
     // encore, PlatformException si l'Activity n'est pas prête...) : le
     // builder de AudioService.init() peut avoir déjà tourné et construit un
-    // SpeechifyAudioHandler avant l'échec, auquel cas SpeechifyAudioHandler
+    // TalkTomeAudioHandler avant l'échec, auquel cas TalkTomeAudioHandler
     // .instance pointe déjà dessus. Il FAUT récupérer cette même instance
     // plutôt que d'en construire une nouvelle — sinon les widgets qui
     // écoutent l'instance capturée avant l'échec (ex: le mini-lecteur, dont
@@ -77,7 +79,7 @@ Future<void> ensureAudioHandler() async {
     // les mises à jour faites sur la "vraie" instance utilisée ensuite pour
     // la lecture.
     debugPrint('⚠️ AudioService.init a échoué ($e) — récupération du handler existant');
-    audioHandler = SpeechifyAudioHandler.instance ?? SpeechifyAudioHandler();
+    audioHandler = TalkTomeAudioHandler.instance ?? TalkTomeAudioHandler();
   }
 }
 
@@ -113,6 +115,7 @@ void main() async {
   // Ouvrir les boxes persistantes
   await Hive.openBox<Folder>('folders');
   await Hive.openBox<Ebook>('ebooks');
+  await _rebaseCoverPaths();
   final annotationBox = await Hive.openBox<Annotation>('annotations');
   await _cleanupAnnotationArtifacts(annotationBox);
   await Hive.openBox('reading_stats');
@@ -152,14 +155,14 @@ void main() async {
   warmthNotifier.value = (settings.get('warmth', defaultValue: 0.0) as num).toDouble();
   dimNotifier.value = (settings.get('dim', defaultValue: 0.0) as num).toDouble();
 
-  // Speechify Boost : appairage déposé par adb (développement), puis
+  // TalkTome Boost : appairage déposé par adb (développement), puis
   // recherche de l'ordinateur en arrière-plan.
   await PcBoostService.instance.importPairingFileIfAny();
   if (PcBoostService.instance.enabled) {
     unawaited(PcBoostService.instance.base(force: true));
   }
 
-  runApp(const SpeechifyApp());
+  runApp(const TalkTomeApp());
 
   // Debug uniquement, et seulement si un fichier déclencheur a été déposé
   // via adb — voir llm_selftest.dart.
@@ -230,14 +233,14 @@ ThemeMode _parseThemeMode(String value) {
   }
 }
 
-class SpeechifyApp extends StatefulWidget {
-  const SpeechifyApp({Key? key}) : super(key: key);
+class TalkTomeApp extends StatefulWidget {
+  const TalkTomeApp({Key? key}) : super(key: key);
 
   @override
-  State<SpeechifyApp> createState() => _SpeechifyAppState();
+  State<TalkTomeApp> createState() => _TalkTomeAppState();
 }
 
-class _SpeechifyAppState extends State<SpeechifyApp> {
+class _TalkTomeAppState extends State<TalkTomeApp> {
   @override
   void initState() {
     super.initState();
@@ -267,7 +270,7 @@ class _SpeechifyAppState extends State<SpeechifyApp> {
           valueListenable: appLocaleNotifier,
           builder: (context, appLocale, _) {
             return MaterialApp(
-              title: 'Speechify',
+              title: 'TalkTome',
               debugShowCheckedModeBanner: false,
               theme: ThemeData(
                 useMaterial3: true,
@@ -299,5 +302,28 @@ class _SpeechifyAppState extends State<SpeechifyApp> {
         );
       },
     );
+  }
+}
+
+/// Les couvertures sont enregistrées avec leur chemin complet, qui contient
+/// l'identifiant de l'app. Après un changement d'identifiant (ancienne app
+/// copiée dans la nouvelle), on recale ces chemins sur le dossier actuel.
+Future<void> _rebaseCoverPaths() async {
+  try {
+    final docs = (await getApplicationDocumentsDirectory()).path;
+    final box = Hive.box<Ebook>('ebooks');
+    for (final ebook in box.values.toList()) {
+      final path = ebook.coverImagePath;
+      if (path == null || await File(path).exists()) continue;
+      final i = path.indexOf('/covers/');
+      if (i < 0) continue;
+      final moved = '$docs${path.substring(i)}';
+      if (await File(moved).exists()) {
+        ebook.coverImagePath = moved;
+        await box.put(ebook.id, ebook);
+      }
+    }
+  } catch (e) {
+    debugPrint('Recalage des couvertures impossible : $e');
   }
 }

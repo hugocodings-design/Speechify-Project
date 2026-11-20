@@ -264,7 +264,7 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadMo
     // Model parameters
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = n_gpu_layers;
-    // Speechify : pas de mmap. Sous Android, les pages d'un fichier mappé
+    // TalkTome : pas de mmap. Sous Android, les pages d'un fichier mappé
     // sont « récupérables » : le système les jette dès qu'il veut de la
     // mémoire, et chaque mot généré relisait alors des morceaux du modèle
     // sur le stockage (mesuré : ~2 jetons/s). Chargé en RAM, il y reste.
@@ -337,7 +337,7 @@ Java_com_write4me_llama_1flutter_1android_LlamaFlutterAndroidPlugin_nativeLoadMo
 
 static jobject g_token_callback = nullptr;
 
-// Speechify : jetons du prompt + de la réponse actuellement présents dans le
+// TalkTome : jetons du prompt + de la réponse actuellement présents dans le
 // cache KV. Le prompt suivant ne recalcule que ce qui diffère (le long
 // préambule d'instructions, identique d'une requête à l'autre, est gratuit
 // après la première fois).

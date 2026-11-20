@@ -384,7 +384,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
 
         const Divider(),
 
-        // ── Accélération par l'ordinateur (Speechify Boost) ─────────────
+        // ── Accélération par l'ordinateur (TalkTome Boost) ─────────────
         SectionHeader(label: l10n.profileScreen_boostSection),
         const PcBoostTile(),
       ],

@@ -14,7 +14,7 @@ class RecentScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Speechify'),
+        title: const Text('TalkTome'),
         centerTitle: true,
         elevation: 0,
       ),

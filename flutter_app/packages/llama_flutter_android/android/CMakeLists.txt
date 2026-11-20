@@ -10,7 +10,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-z,max-page-size=16384")
 
-# ARM64 optimizations — Speechify : ciblé pour le Galaxy S24 Ultra
+# ARM64 optimizations — TalkTome : ciblé pour le Galaxy S24 Ultra
 # (Snapdragon 8 Gen 3, armv9 : dotprod + i8mm + fp16). Le paquet d'origine
 # compilait en armv8-a simple, SANS ces instructions : la multiplication des
 # poids quantifiés tombait sur le chemin lent (plusieurs fois plus lent).
