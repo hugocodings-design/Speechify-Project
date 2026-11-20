@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:speechify/services/scan_to_book_service.dart';
+import 'package:talktome/services/scan_to_book_service.dart';
 
 /// Le reste du flux de scan (caméra, OCR, redressement) se vérifie sur
 /// l'appareil. La structuration du texte, elle, est du Dart pur : c'est la

@@ -203,7 +203,7 @@ pip install -r requirements.txt
 uvicorn main:app --reload
 
 # Flutter
-flutter create speechify                    # Create new project
+flutter create talktome                    # Create new project
 flutter pub get                             # Install dependencies
 flutter pub run build_runner build          # Generate Hive adapters
 flutter run                                 # Run app
@@ -222,7 +222,7 @@ Returns server status.
 
 **Response:**
 ```json
-{"status": "ok", "service": "Speechify API"}
+{"status": "ok", "service": "TalkTome API"}
 ```
 
 ---

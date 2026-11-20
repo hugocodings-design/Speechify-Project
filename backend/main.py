@@ -1,5 +1,5 @@
 """
-Speechify Backend - FastAPI Server
+TalkTome Backend - FastAPI Server
 Handles TTS synthesis and voice list management
 """
 
@@ -19,7 +19,7 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-app = FastAPI(title="Speechify API", version="1.0.0")
+app = FastAPI(title="TalkTome API", version="1.0.0")
 
 # CORS middleware to allow Flutter app requests
 app.add_middleware(
@@ -97,7 +97,7 @@ AVAILABLE_VOICES = [
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "ok", "service": "Speechify API"}
+    return {"status": "ok", "service": "TalkTome API"}
 
 @app.get("/api/voices", response_model=dict)
 async def get_voices():
@@ -444,7 +444,7 @@ async def extract_epub(file: UploadFile = File(...)):
 async def api_root():
     """API root endpoint"""
     return {
-        "service": "Speechify API",
+        "service": "TalkTome API",
         "version": "1.0.0",
         "endpoints": {
             "health": "/api/health",

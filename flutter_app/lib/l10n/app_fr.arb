@@ -1,6 +1,6 @@
 {
   "@@locale": "fr",
-  "appTitle": "Speechify",
+  "appTitle": "TalkTome",
   "@appTitle": { "description": "Nom de l'application" },
 
   "miniPlayer_almostDone": "Presque terminé",

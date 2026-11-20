@@ -36,9 +36,9 @@ AppLocalizations _currentL10n() {
 /// d'avance. La synthèse se fait directement à la vitesse choisie : à 1,5×
 /// le moteur produit un audio plus court, donc l'avance se constitue aussi
 /// vite qu'à 1×, et le son reste naturel (pas d'accélération après coup).
-class SpeechifyAudioHandler extends BaseAudioHandler {
-  static SpeechifyAudioHandler? _instance;
-  static SpeechifyAudioHandler? get instance => _instance;
+class TalkTomeAudioHandler extends BaseAudioHandler {
+  static TalkTomeAudioHandler? _instance;
+  static TalkTomeAudioHandler? get instance => _instance;
 
   /// Avance visée (secondes d'écoute) et plafond en nombre de phrases.
   static const double _targetSecondsAhead = 180;
@@ -128,7 +128,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
   /// chargement.
   final ValueNotifier<bool> shouldBePlayingNotifier = ValueNotifier(true);
 
-  SpeechifyAudioHandler() {
+  TalkTomeAudioHandler() {
     _instance = this;
     for (int i = 0; i < 2; i++) {
       final idx = i;
@@ -702,7 +702,7 @@ class SpeechifyAudioHandler extends BaseAudioHandler {
   void _updateMediaItem() {
     final total = _sentenceTexts.length;
     mediaItem.add(MediaItem(
-      id: 'speechify_current',
+      id: 'talktome_current',
       title: _bookTitle,
       artist: _currentL10n().audioHandler_sentenceProgress(_currentIndex + 1, total),
       duration: Duration(seconds: total),

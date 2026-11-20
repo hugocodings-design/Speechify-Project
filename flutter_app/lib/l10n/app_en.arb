@@ -1,6 +1,6 @@
 {
   "@@locale": "en",
-  "appTitle": "Speechify",
+  "appTitle": "TalkTome",
 
   "miniPlayer_almostDone": "Almost done",
   "miniPlayer_remainingMinutes": "{count, plural, =0{Almost done} one{1 min left} other{{count} min left}}",

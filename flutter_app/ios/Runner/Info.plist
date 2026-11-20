@@ -4,7 +4,7 @@
 <dict>
 	<key>CADisableMinimumFrameDurationOnPhone</key>
 	<true/>
-	<!-- Speechify Boost : connexion en http simple à l'ordinateur de la
+	<!-- TalkTome Boost : connexion en http simple à l'ordinateur de la
 	     maison (Wi-Fi) ou via Tailscale. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
@@ -14,7 +14,7 @@
 		<true/>
 	</dict>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>TalkTome se connecte à votre ordinateur sur le Wi-Fi (Speechify Boost) pour générer les voix IA plus vite.</string>
+	<string>TalkTome se connecte à votre ordinateur sur le Wi-Fi (TalkTome Boost) pour générer les voix IA plus vite.</string>
 	<key>NSCameraUsageDescription</key>
 	<string>L'appareil photo sert à scanner les pages d'un livre pour les convertir en texte.</string>
 	<key>NSPhotoLibraryUsageDescription</key>
@@ -30,7 +30,7 @@
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>speechify</string>
+	<string>talktome</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

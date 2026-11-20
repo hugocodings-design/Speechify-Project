@@ -70,7 +70,7 @@ android {
                 )
                 
                 // ARM64 optimization flags
-                // Speechify : llama.cpp toujours compilé en Release, même
+                // TalkTome : llama.cpp toujours compilé en Release, même
                 // dans l'APK debug qu'on installe sur le téléphone — en -O0
                 // la génération serait des dizaines de fois plus lente.
                 arguments += listOf(

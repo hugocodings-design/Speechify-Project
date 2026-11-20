@@ -408,7 +408,7 @@ class _HomeScreenState extends State<HomeScreen> {
               onPressed: () => setState(() => _currentFolderId = null),
             )
           : null,
-      title: Text(currentFolder?.name ?? 'Speechify'),
+      title: Text(currentFolder?.name ?? 'TalkTome'),
       centerTitle: true,
       elevation: 0,
       actions: [
