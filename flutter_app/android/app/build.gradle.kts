@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.speechify"
+    namespace = "com.hugo.talktome"
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId = "com.example.speechify"
+        applicationId = "com.hugo.talktome"
         // You can update the following values to match your application needs.
         // For more information, see: https://flutter.dev/to/review-gradle-config.
         // 26 (Android 8) : exigé par le moteur d'IA locale (llama.cpp).

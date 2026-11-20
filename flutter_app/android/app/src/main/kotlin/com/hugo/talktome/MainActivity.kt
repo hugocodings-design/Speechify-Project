@@ -1,4 +1,4 @@
-package com.example.speechify
+package com.hugo.talktome
 
 import com.ryanheise.audioservice.AudioServiceActivity
 

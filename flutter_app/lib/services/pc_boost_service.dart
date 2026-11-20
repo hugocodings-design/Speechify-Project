@@ -13,7 +13,7 @@ import 'word_aligner.dart';
 /// État de la connexion à l'ordinateur, pour l'écran de réglages.
 enum PcBoostStatus { off, searching, connected, unreachable }
 
-/// « Speechify Boost » : quand l'ordinateur de l'utilisateur est joignable
+/// « TalkTome Boost » : quand l'ordinateur de l'utilisateur est joignable
 /// (Wi-Fi de la maison, ou partout via Tailscale), les voix IA et l'IA locale
 /// tournent sur lui (carte graphique) au lieu du téléphone — mêmes modèles,
 /// même qualité, bien plus vite. Sinon tout se fait sur le téléphone, comme

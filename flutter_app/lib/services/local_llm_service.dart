@@ -67,7 +67,7 @@ class LocalLlmService {
 
   Future<bool> isInstalled() async => (await modelFile()).exists();
 
-  /// L'IA est utilisable : sur l'ordinateur (Speechify Boost) ou sur le
+  /// L'IA est utilisable : sur l'ordinateur (TalkTome Boost) ou sur le
   /// téléphone.
   Future<bool> isAvailable() async =>
       await PcBoostService.instance.llmAvailable() || await isInstalled();

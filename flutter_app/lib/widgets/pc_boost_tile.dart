@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import '../l10n/generated/app_localizations.dart';
 import '../services/pc_boost_service.dart';
 
-/// Réglage « Speechify Boost » (écran Profil) : état de la connexion à
+/// Réglage « TalkTome Boost » (écran Profil) : état de la connexion à
 /// l'ordinateur, et panneau pour activer / saisir adresses et code.
 class PcBoostTile extends StatefulWidget {
   const PcBoostTile({super.key});
@@ -69,7 +69,7 @@ class _PcBoostTileState extends State<PcBoostTile> {
             mainAxisSize: MainAxisSize.min,
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Speechify Boost',
+              Text('TalkTome Boost',
                   style: Theme.of(context)
                       .textTheme
                       .titleLarge
@@ -135,7 +135,7 @@ class _PcBoostTileState extends State<PcBoostTile> {
       valueListenable: _boost.status,
       builder: (context, s, _) => ListTile(
         leading: Icon(Icons.computer_rounded, color: _statusColor(context, s)),
-        title: const Text('Speechify Boost'),
+        title: const Text('TalkTome Boost'),
         subtitle: Text(_statusText(l10n, s, _boost.activeHost.value)),
         trailing: const Icon(Icons.chevron_right_rounded),
         onTap: _openPanel,

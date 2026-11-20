@@ -1,4 +1,4 @@
-name: speechify
+name: talktome
 description: "AI-powered ebook reader with text-to-speech"
 publish_to: 'none'
 

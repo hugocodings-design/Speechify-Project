@@ -27,7 +27,7 @@ import '../widgets/dictionary_sheet.dart';
 import 'annotations_screen.dart';
 import '../widgets/page_turner.dart';
 import '../services/reading_theme.dart';
-import '../services/speechify_audio_handler.dart' show SpeechifyAudioHandler;
+import '../services/talktome_audio_handler.dart' show TalkTomeAudioHandler;
 
 // ─── Modèles internes ────────────────────────────────────────────────────────
 
@@ -2885,7 +2885,7 @@ class _ReaderScreenState extends State<ReaderScreen> {
   Widget _buildPitchSlider(BuildContext context, VoidCallback refresh) {
     final l10n = AppLocalizations.of(context)!;
     final voice = audioHandler?.voiceName ?? widget.ebook.selectedVoiceName;
-    final pitch = SpeechifyAudioHandler.pitchFor(voice);
+    final pitch = TalkTomeAudioHandler.pitchFor(voice);
     final name = characterForVoice(voice).name;
     final grey = Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.grey);
     return Column(
@@ -2916,8 +2916,8 @@ class _ReaderScreenState extends State<ReaderScreen> {
             Expanded(
               child: Slider(
                 value: pitch,
-                min: SpeechifyAudioHandler.pitchMin,
-                max: SpeechifyAudioHandler.pitchMax,
+                min: TalkTomeAudioHandler.pitchMin,
+                max: TalkTomeAudioHandler.pitchMax,
                 divisions: 12,
                 onChanged: (v) async {
                   await audioHandler?.setVoicePitch(voice, v);

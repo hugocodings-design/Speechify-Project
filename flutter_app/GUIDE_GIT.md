@@ -1,10 +1,10 @@
-# Guide Git — Speechify
+# Guide Git — TalkTome
 
 Git garde un historique de chaque version de votre code. Vous pouvez toujours revenir en arrière si une modification ne vous plaît pas.
 
 Toutes les commandes ci-dessous s'exécutent dans un terminal PowerShell, après :
 ```powershell
-cd C:\dev\speechify
+cd "c:\Users\Hdasi\Desktop\PROJETS VISUAL CODE\TalkTome"
 ```
 
 ## 1. Voir ce qui a changé

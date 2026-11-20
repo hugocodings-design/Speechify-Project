@@ -360,7 +360,7 @@ class SherpaTtsService {
     }
     final spec = modelById(voice.modelId);
 
-    // Ordinateur joignable (Speechify Boost) : synthèse sur sa carte
+    // Ordinateur joignable (TalkTome Boost) : synthèse sur sa carte
     // graphique, ~13× temps réel au lieu de ~2×. Sinon, sur le téléphone.
     final remote = await PcBoostService.instance.synthesize(
       voiceSpec: {

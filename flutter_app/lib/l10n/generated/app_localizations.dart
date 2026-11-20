@@ -101,7 +101,7 @@ abstract class AppLocalizations {
   /// Nom de l'application
   ///
   /// In fr, this message translates to:
-  /// **'Speechify'**
+  /// **'TalkTome'**
   String get appTitle;
 
   /// No description provided for @miniPlayer_almostDone.
